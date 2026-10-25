@@ -1,6 +1,28 @@
 [package]
-name = "sample-app"
+name = "app"
 version = "0.1.0"
 edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
 
 [dependencies]
+# Without its default features, which need tokio's networking, so that axum
+# builds for wasm32-unknown-unknown.
+axum = { version = "0.8", default-features = false }
+futures = "0.3"
+hypersig = "0.4.1"
+serde = { version = "1", features = ["derive"] }
+tower-service = "0.3"
+# `#[durable_object]` expands to wasm-bindgen's macros, whose expansion names
+# the `wasm_bindgen` crate by that path.
+wasm-bindgen = "0.2"
+worker = { version = "0.8", features = ["http", "axum", "d1"] }
+
+# Clippy's pedantic group adds warnings for code that compiles but hides a
+# mistake or reads worse, such as a cast that can lose digits or an argument
+# taken by value that is only read. Turn one off by name, such as
+# `module_name_repetitions = "allow"`, where it does not fit this project.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
