@@ -21,7 +21,7 @@ http://localhost:8787 で開く。D1 は `.wrangler/` の SQLite に保存され
 
 初回起動前に `npx wrangler d1 migrations apply app --local` を実行する。
 `.dev.vars` に `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REDIRECT_URL` を設定し、`/login` から Google でログインする。
-本番では同名の GitHub Secrets が必要。認証・保存契約と検証結果は [docs/persistence-auth.md](docs/persistence-auth.md) を参照。
+本番では同名の GitHub Secrets が必要。Google の設定、セッション、失効、検証結果は [docs/google-auth.md](docs/google-auth.md)、利用者ごとのデータ分離と既存データの引き継ぎは [docs/data-isolation.md](docs/data-isolation.md)、保存契約は [docs/persistence-auth.md](docs/persistence-auth.md) を参照。
 
 ## セットアップ（初回のみ）
 
