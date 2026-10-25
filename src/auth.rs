@@ -5,7 +5,7 @@
 use crate::{AppState, assets, auth_store, oidc, session_state};
 use axum::{
     extract::{FromRequestParts, Request, State},
-    http::{HeaderValue, StatusCode, Uri, header, request::Parts},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header, request::Parts},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
     routing::get,
@@ -136,6 +136,15 @@ pub struct Login {
     problem: String,
 }
 pub const SIGN_OUT: Action<Login, ()> = Action::post("/auth/logout");
+
+/// The sign-out button for any page. The action is the one `SIGN_OUT` serves;
+/// only the page's state type differs.
+pub fn sign_out_button<S>() -> hypersig::html::El<S> {
+    use hypersig_ui::{ButtonSize, ButtonVariant, button};
+    button(ButtonVariant::Outline, ButtonSize::Default)
+        .on_click(Action::<S>::post(SIGN_OUT.path()).call())
+        .text("ログアウト")
+}
 hypersig::routes! {
     fn routes(Router<AppState>);
     const LOGIN: Route = "/login" => page;
@@ -170,7 +179,11 @@ impl Notice {
 }
 
 async fn page(_: AppState, session: Session, (): ()) -> Page<Login> {
-    use hypersig::html::{a, div, p};
+    use hypersig::html::{a, main};
+    use hypersig_ui::{
+        AlertVariant, ButtonSize, ButtonVariant, Level, alert, alert_description, alert_title,
+        button_style, card, card_content, card_description, card_header, card_title,
+    };
     let notice = session.get::<String>(NOTICE).await.ok().flatten();
     if notice.is_some() {
         pin(&session).await;
@@ -185,10 +198,34 @@ async fn page(_: AppState, session: Session, (): ()) -> Page<Login> {
             problem: problem.clone(),
         },
     )
+    .global(hypersig_ui::global())
+    .theme(hypersig_ui::theme())
     .child(
-        div()
-            .child(a().href(START.link()).text("Google でログイン"))
-            .child(p().bind_text(Login::problem())),
+        main()
+            .attr("style", "max-width:28rem;margin:0 auto;padding:4rem 1rem")
+            .child(
+                card()
+                    .child(
+                        card_header()
+                            .child(card_title(Level::H2).text("ログイン"))
+                            .child(card_description().text("Google アカウントでログインします。")),
+                    )
+                    .child(
+                        card_content()
+                            .child(
+                                a().href(START.link())
+                                    .css(button_style(ButtonVariant::Default, ButtonSize::Lg))
+                                    .attr("style", "text-decoration:none")
+                                    .text("Google でログイン"),
+                            )
+                            .child(
+                                alert(AlertVariant::Destructive)
+                                    .show(!Login::problem().is_empty())
+                                    .child(alert_title().text("ログインできません"))
+                                    .child(alert_description().bind_text(Login::problem())),
+                            ),
+                    ),
+            ),
     )
 }
 
@@ -233,7 +270,18 @@ async fn pin(session: &Session) {
 /// Sends the visitor back to the login page with a fixed notice.
 async fn rejected(session: &Session, notice: Notice) -> Response {
     pin(session).await;
-    let _ = session.insert(NOTICE, notice.code()).await;
+    // Only a browser that started a flow or is signed in has a session row to
+    // carry the notice. Any other request must not create one.
+    let known = session
+        .get::<String>(BINDING)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+        || session_state::current(session).await.is_some();
+    if known {
+        let _ = session.insert(NOTICE, notice.code()).await;
+    }
     private(Redirect::to(LOGIN.url(()).as_str()).into_response())
 }
 
@@ -255,19 +303,48 @@ fn private(mut response: Response) -> Response {
     clippy::result_large_err,
     reason = "a page handler answers with an arbitrary response through its `Err`"
 )]
-async fn start(state: AppState, session: Session, (): ()) -> Result<PageResponse, Response> {
+async fn start(
+    state: AppState,
+    (session, headers): (Session, HeaderMap),
+    (): (),
+) -> Result<PageResponse, Response> {
     pin(&session).await;
     let now = auth_store::now_ms();
+    // Expired flows and sessions are removed as visitors arrive, and by cron.
+    let _ = auth_store::purge_expired(&state.db, now).await;
+    let slot = async {
+        let reservation = auth_store::random_token().ok()?;
+        let binding = auth_store::random_token().ok()?;
+        let reserved = auth_store::reserve_flow(
+            &state.db,
+            &reservation,
+            &binding,
+            &client_key(&headers),
+            now,
+            now + FLOW_LIFETIME_MS,
+            MAX_LIVE_FLOWS,
+        )
+        .await
+        .ok()?;
+        Some(reserved.map(|()| (reservation, binding)))
+    }
+    .await;
+    let (reservation, binding) = match slot {
+        Some(Some(slot)) => slot,
+        Some(None) => return Err(throttled()),
+        None => {
+            log_failure("start");
+            return Ok(PageResponse::redirect(LOGIN.url(())));
+        }
+    };
     let flow = async {
         let started = oidc::start(&oidc::Fetch, &state.oidc).await.ok()?;
-        let binding = auth_store::random_token().ok()?;
-        auth_store::create_flow(
+        auth_store::fill_flow(
             &state.db,
+            &reservation,
             &started.state,
             &started.nonce,
             &started.pkce_verifier,
-            &binding,
-            now + FLOW_LIFETIME_MS,
         )
         .await
         .ok()?;
@@ -275,14 +352,52 @@ async fn start(state: AppState, session: Session, (): ()) -> Result<PageResponse
         Some(started.url)
     }
     .await;
-    // Expired flows and sessions are removed as visitors arrive, and by cron.
-    let _ = auth_store::purge_expired(&state.db, now).await;
     if let Some(url) = flow {
         return Err(private(Redirect::to(url.as_str()).into_response()));
     }
     log_failure("start");
     let _ = session.insert(NOTICE, Notice::Failed.code()).await;
     Ok(PageResponse::redirect(LOGIN.url(())))
+}
+
+/// A client that holds this many unconsumed flows cannot start another until
+/// one expires. Each start writes a flow row and at most one session row.
+const MAX_LIVE_FLOWS: u32 = 10;
+
+/// The connecting address Cloudflare reports, hashed, with an IPv6 address
+/// reduced to its /64 network so that one subscriber's addresses share a slot.
+fn client_key(headers: &HeaderMap) -> String {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use sha2::{Digest as _, Sha256};
+    let address = headers
+        .get("cf-connecting-ip")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown");
+    let network = match address.parse::<std::net::Ipv6Addr>() {
+        Ok(ip) => {
+            let [a, b, c, d, ..] = ip.segments();
+            format!("{a:x}:{b:x}:{c:x}:{d:x}")
+        }
+        Err(_) => address.to_owned(),
+    };
+    URL_SAFE_NO_PAD.encode(Sha256::digest(network.as_bytes()))
+}
+
+/// The answer to a client at its limit: a fixed text and no session row.
+fn throttled() -> Response {
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        "ログインの開始が多すぎます。しばらくしてからもう一度お試しください。",
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("600"));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    private(response)
 }
 
 async fn callback(State(state): State<AppState>, session: Session, uri: Uri) -> Response {
@@ -381,6 +496,37 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt as _;
     use tower_sessions::{SessionManagerLayer, SessionStore as _};
+
+    fn from(address: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", address.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn a_client_is_a_hash_and_an_ipv6_network_shares_one_slot() {
+        let a = client_key(&from("203.0.113.7"));
+        assert_ne!(a, client_key(&from("203.0.113.8")));
+        assert!(!a.contains("203"));
+        assert_eq!(
+            client_key(&from("2001:db8:1:2:aaaa::1")),
+            client_key(&from("2001:db8:1:2:bbbb::2"))
+        );
+        assert_ne!(
+            client_key(&from("2001:db8:1:2::1")),
+            client_key(&from("2001:db8:1:3::1"))
+        );
+        assert_eq!(client_key(&HeaderMap::new()), client_key(&from("unknown")));
+    }
+
+    #[test]
+    fn the_throttled_answer_is_fixed_and_uncached() {
+        let response = throttled();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "600");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(response.headers().get(header::SET_COOKIE).is_none());
+    }
 
     fn user(version: i64, status: &str) -> auth_store::User {
         auth_store::User {

@@ -295,7 +295,8 @@ async fn index(state: AppState, member: auth::Member, (): ()) -> Result<Page<Cou
                     hypersig::html::a()
                         .href(NOTIFICATIONS.link())
                         .text("通知設定"),
-                ),
+                )
+                .child(auth::sign_out_button()),
         ))
 }
 

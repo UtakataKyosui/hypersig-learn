@@ -118,8 +118,9 @@ Cloudflare へ手動で入れる場合（通常は不要）は、`npx wrangler s
 |---|---|---|
 | `migrations/0002_auth.sql` | `users`・`external_identities`・`sessions`・`oauth_flows` | `migrations/rollback/0002_auth_down.sql` |
 | `migrations/0003_owner_isolation.sql` | 利用者別の `push_probe`・`counters`、配信の所有者トリガー、移行記録 | `migrations/rollback/0003_owner_isolation_down.sql` |
+| `migrations/0004_flow_limit.sql` | `oauth_flows.client`（接続元のハッシュ）と索引 | `migrations/rollback/0004_flow_limit_down.sql` |
 
-`wrangler d1 migrations apply` は前進のみ。切り戻しファイルは `wrangler d1 execute --file` で手動実行する。0003 を先に、0002 を後に実行する（`legacy_owner_migration` が `users` を参照するため）。その前に旧版の Worker に戻しておく（新版の Worker は新テーブルを前提にする）。0001 の既存の服薬・購読データには触れない。単一所有者データの引き継ぎと切り戻しは [data-isolation.md](data-isolation.md)。
+`wrangler d1 migrations apply` は前進のみ。切り戻しファイルは `wrangler d1 execute --file` で手動実行する。0004、0003、0002 の順に実行する（`legacy_owner_migration` が `users` を参照するため）。その前に旧版の Worker に戻しておく（新版の Worker は新テーブルを前提にする）。0001 の既存の服薬・購読データには触れない。単一所有者データの引き継ぎと切り戻しは [data-isolation.md](data-isolation.md)。
 
 デプロイの順序: ① GitHub Secrets を3つ登録 → ② Google Cloud の redirect URI を登録 → ③ merge（CI が migration → Worker の順に適用）→ ④ 移行先の利用者が一度ログイン → ⑤ `scripts/legacy-owner.sh` で既存データを引き継ぐ。④⑤の前でも新規利用者は使えるが、旧データは `owner='owner'` のまま誰からも見えない。
 
@@ -152,5 +153,6 @@ Cloudflare へ手動で入れる場合（通常は不要）は、`npx wrangler s
 ## 制約と未対応
 
 - 登録は開放されている。Google アカウントを持つ人は誰でも利用者を作れる（同意画面を「テスト」にしてテストユーザーに限定するか、必要なら許可リストを導入する）。
-- ログアウトの操作 UI は用意していない（`SIGN_OUT` Action のみ）。
+- 未認証の `/auth/google` は、接続元（`cf-connecting-ip` のハッシュ。IPv6 は /64）ごとに未消費のフローを10件までしか作れない。超えると 429（`Retry-After: 600`）を返し、D1 の行は作らない。フローの期限は10分で、期限切れは cron とログイン開始時に消える。Cloudflare のレート制限（WAF）は別に設定できるが、このアプリの上限はそれに依存しない。
+- 開始していないブラウザからの callback は、セッションの行を作らない。このため、ログイン画面の案内文は出ない。
 - Passkey は未実装。`Level::Additional` と `promote` は将来の追加認証の足場。
