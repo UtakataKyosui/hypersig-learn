@@ -659,7 +659,13 @@ mod tests {
         let requests = [
             crate::medication_edit::SAVE_MEDICATION.request(&(target.clone(), form)),
             crate::medication_edit::SAVE_SLOT.request(&(target.clone(), String::new(), slot)),
-            crate::medication_edit::REMOVE_SLOT.request(&(target, "slot".into())),
+            crate::medication_edit::REMOVE_SLOT.request(&(target.clone(), "slot".into())),
+            crate::pause_edit::SAVE_PAUSE.request(&(
+                target.clone(),
+                String::new(),
+                crate::pause_edit::blank_pause(),
+            )),
+            crate::pause_edit::REMOVE_PAUSE.request(&(target, "pause".into())),
         ];
         for request in requests {
             assert_eq!(send(&app, request).status(), StatusCode::UNAUTHORIZED);

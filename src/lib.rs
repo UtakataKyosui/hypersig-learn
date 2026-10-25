@@ -24,6 +24,7 @@ mod medication_style;
 mod medications;
 mod notifications;
 mod oidc;
+mod pause_edit;
 mod push;
 mod repository;
 pub mod schedule_view;
@@ -443,6 +444,8 @@ async fn fetch(
         )
         .action(medication_edit::SAVE_SLOT, medication_edit::save_slot)
         .action(medication_edit::REMOVE_SLOT, medication_edit::remove_slot)
+        .action(pause_edit::SAVE_PAUSE, pause_edit::save_pause)
+        .action(pause_edit::REMOVE_PAUSE, pause_edit::remove_pause)
         .stream(CLOCK, clock)
         .stream(SAVES, saves)
         .layer(axum::middleware::from_fn_with_state(

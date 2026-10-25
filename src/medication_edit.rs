@@ -10,9 +10,10 @@ use crate::{
     auth::Member,
     domain::UtcInstant,
     medication_form::{MedicationForm, REPEATS, SlotView, TIMINGS, UNITS, blank_slot},
-    medication_input::{DoseSlotInput, MedicationInput},
+    medication_input::{DoseSlotInput, MedicationInput, PauseInput},
     medication_style::STYLE,
     medications::{self, Editor, Error, Slot},
+    pause_edit::{self, PauseView},
 };
 use axum::http::StatusCode;
 use hypersig::html::{Class, El, a, div, each_keyed, fieldset, h1, legend, li, main, p, span, ul};
@@ -52,6 +53,21 @@ pub struct EditPage {
     pub problem: String,
     /// The HTTP status of a failed call, `0` while none failed.
     pub status: i32,
+    /// The pause periods, earliest first.
+    pub pauses: Vec<PauseView>,
+    /// The pause form: adds a period, or edits the one named by `pause_editing`.
+    pub pause: Form<PauseInput>,
+    /// The id of the pause period `pause` edits, or `""` while it adds one.
+    pub pause_editing: String,
+    pub pause_busy: bool,
+    pub pause_notice: String,
+    /// The id and the label of the pause period the delete dialog asks about.
+    pub removing: String,
+    pub removing_label: String,
+    /// Says that today is paused, or `""` while it is not.
+    pub pause_now: String,
+    /// When the next dose is planned.
+    pub next_dose: String,
 }
 
 pub const SAVE_MEDICATION: Action<EditPage, (Target, MedicationForm)> =
@@ -94,6 +110,7 @@ pub async fn page(state: AppState, member: Member, id: String) -> Result<Page<Ed
 /// The edit page for `editor`.
 #[must_use]
 pub fn render(editor: &Editor) -> Page<EditPage> {
+    let standing = pause_edit::standing(editor, hypersig::Timestamp::now().as_millis());
     let state = EditPage {
         target: Target {
             id: editor.id.clone(),
@@ -112,6 +129,15 @@ pub fn render(editor: &Editor) -> Page<EditPage> {
         slot_notice: String::new(),
         problem: String::new(),
         status: 0,
+        pauses: pause_edit::views(editor),
+        pause: Form::new(pause_edit::blank_pause()),
+        pause_editing: String::new(),
+        pause_busy: false,
+        pause_notice: String::new(),
+        removing: String::new(),
+        removing_label: String::new(),
+        pause_now: standing.paused,
+        next_dose: standing.next,
     };
     Page::new("薬の設定", state)
         .global(hypersig_ui::global())
@@ -134,8 +160,10 @@ fn view() -> El<EditPage> {
                 .child(a().href(crate::MEDICATIONS.link()).text("一覧へ戻る")),
         )
         .child(failure_alerts())
+        .child(pause_edit::standing_banner())
         .child(medication_card())
         .child(slots_card())
+        .child(pause_edit::pauses_card())
         .child(crate::auth::sign_out_button())
 }
 
@@ -457,11 +485,12 @@ fn medication_saved(editor: &Editor) -> Patches<EditPage> {
         EditPage::medication()
             .patch(Form::new(form))
             .and(target_patch(editor))
+            .and(pause_edit::standing_patch(editor))
             .and(EditPage::notice().patch("保存しました。".to_owned())),
     )
 }
 
-fn target_patch(editor: &Editor) -> SignalPatch<EditPage> {
+pub(crate) fn target_patch(editor: &Editor) -> SignalPatch<EditPage> {
     EditPage::target().patch(Target {
         id: editor.id.clone(),
         revision: editor.revision,
@@ -480,6 +509,7 @@ fn slot_saved(editor: &Editor, slot: SlotView) -> Patches<EditPage> {
         .signals(
             target_patch(editor)
                 .and(slot_form_reset())
+                .and(pause_edit::standing_patch(editor))
                 .and(EditPage::slot_notice().patch("服薬枠を保存しました。".to_owned())),
         )
         .list(EditPage::slots().patch_upsert(&[slot], |slot| slot.at(SlotView::id())))
@@ -490,6 +520,7 @@ fn slot_removed(editor: &Editor, id: String) -> Patches<EditPage> {
         .signals(
             target_patch(editor)
                 .and(slot_form_reset())
+                .and(pause_edit::standing_patch(editor))
                 .and(EditPage::slot_notice().patch("服薬枠を削除しました。".to_owned())),
         )
         .list(EditPage::slots().patch_remove(&[id], |slot| slot.at(SlotView::id())))
@@ -505,7 +536,11 @@ fn rejected<T: hypersig::Validate>(
 
 /// The stored medication `target` names, or a new one when it has none yet.
 /// A save made on a revision other than the stored one is a conflict.
-async fn stored(state: &AppState, member: &Member, target: &Target) -> Result<Editor, Error> {
+pub(crate) async fn stored(
+    state: &AppState,
+    member: &Member,
+    target: &Target,
+) -> Result<Editor, Error> {
     if target.revision == 0 {
         return Ok(new_editor(target.id.clone(), String::new()));
     }
