@@ -19,6 +19,9 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 # tower-sessions' random session ids use getrandom 0.2, which needs `js`
 # to read the Workers crypto source.
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+# tower-sessions 0.15 draws from getrandom 0.3, which needs `wasm_js` for the
+# same reason.
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 hkdf = "0.13"
 hmac = "0.13"
 hypersig = "0.4.1"
