@@ -160,7 +160,7 @@ request('/notifications/probe', NULL, 409, cookie=cookie_b)
 request('/medications/load', 'runtime-med-' + suffix, 404, cookie=cookie_b)
 other = dict(e, revision=2)
 request('/medications/save', other, 404, cookie=cookie_b)
-request('/medications/delete', {'id': 'runtime-med-' + suffix, 'revision': 2}, 409, cookie=cookie_b)
+request('/medications/remove', ['runtime-med-' + suffix, 2], 409, cookie=cookie_b)
 request('/notifications/subscription', sub, 409, cookie=cookie_b)
 request('/notifications/unsubscribe', sub['endpoint'], 409, cookie=cookie_b)
 (_, body) = request('/notifications/subscription/status', sub['endpoint'], cookie=cookie_b)
@@ -170,7 +170,7 @@ assert '"saved":true' in body
 request('/notifications/unsubscribe', sub['endpoint'], cookie=cookie_a)
 (_, body) = request('/notifications/subscription/status', sub['endpoint'], cookie=cookie_a)
 assert '"saved":false' in body
-request('/medications/delete', {'id': 'runtime-med-' + suffix, 'revision': 2}, cookie=cookie_a)
+request('/medications/remove', ['runtime-med-' + suffix, 2], cookie=cookie_a)
 request('/medications/load', 'runtime-med-' + suffix, 404, cookie=cookie_a)
 
 # Revocation: a version bump and a disabled user end every session at once; expiry ends one.
