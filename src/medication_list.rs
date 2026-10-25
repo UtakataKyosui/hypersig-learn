@@ -167,9 +167,8 @@ fn today_card() -> El<Settings> {
                 .child(card_title(Level::H2).text("今日の予定"))
                 .child(
                     card_description()
-                        .child(span().text("日本時間（Asia/Tokyo）の"))
                         .child(span().bind_text(Settings::today_label()))
-                        .child(span().text("。時刻順です。")),
+                        .child(span().text("の予定を時刻順に表示します。")),
                 ),
         )
         .child(
