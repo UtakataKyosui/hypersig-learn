@@ -83,18 +83,47 @@ impl Editor {
         })
     }
 }
+/// A medication of the list page: its name, why it is or is not notifying,
+/// and the sentence about its next notification.
 #[derive(Signals, Serialize, Deserialize)]
 pub struct Summary {
     pub id: String,
     pub name: String,
     pub revision: i32,
-    pub next_at: Option<hypersig::Timestamp>,
+    /// `State::key` of the medication.
+    pub state: String,
+    /// `State::label`, with the pause period while one holds today.
+    pub status: String,
+    pub next: String,
+}
+/// A dose planned for today, with the medication it belongs to.
+#[derive(Clone, Signals, Serialize, Deserialize)]
+pub struct TodayDose {
+    /// `{medication id}:{slot id}`.
+    pub key: String,
+    pub medication_id: String,
+    pub name: String,
+    pub summary: String,
 }
 #[derive(Signals, Serialize, Deserialize)]
 pub struct Settings {
     pub form: Form<Editor>,
+    /// By name.
     pub items: Vec<Summary>,
+    /// By time.
+    pub today: Vec<TodayDose>,
+    pub today_label: String,
+    /// The next notification of all medications.
+    pub next: String,
     pub problem: String,
+    /// The HTTP status of a failed call, `0` while none failed.
+    pub status: i32,
+    pub busy: bool,
+    pub notice: String,
+    /// The medication the delete dialog asks about.
+    pub removing: String,
+    pub removing_revision: i32,
+    pub removing_label: String,
 }
 #[derive(Serialize, Deserialize)]
 pub struct Delete {
@@ -102,7 +131,6 @@ pub struct Delete {
     pub revision: i32,
 }
 pub const SAVE: Action<Settings, Editor> = Action::post("/medications/save");
-pub const DELETE: Action<Settings, Delete> = Action::post("/medications/delete");
 pub const LOAD: Action<Settings, String> = Action::post("/medications/load");
 #[derive(Debug)]
 pub enum Error {
@@ -132,18 +160,13 @@ impl IntoResponse for Error {
 }
 pub fn summary(editor: &Editor, saved_at: i64, now: i64) -> Result<Summary, Error> {
     let medication = editor.domain(saved_at)?;
-    let next = medication
-        .next(UtcInstant(now))
-        .map_err(|_| Error::Invalid)?;
-    Ok(Summary {
-        id: editor.id.clone(),
-        name: medication.name,
-        revision: editor.revision,
-        next_at: match next {
-            crate::domain::NextDose::At(o) => Some(hypersig::Timestamp::from_millis(o.at.0)),
-            _ => None,
-        },
-    })
+    let assessment =
+        crate::schedule_status::assess(&medication, UtcInstant(now)).map_err(|_| Error::Invalid)?;
+    Ok(crate::schedule_status::summary(
+        editor,
+        &medication.name,
+        &assessment,
+    ))
 }
 fn saved(editor: Editor, now: i64) -> Result<Patches<Settings>, Error> {
     let item = summary(&editor, now, now)?;
@@ -198,16 +221,6 @@ pub async fn save(
             .into()),
         Err(error) => Err(error),
     }
-}
-pub async fn delete(
-    state: AppState,
-    member: Member,
-    input: Delete,
-) -> Result<Patches<Settings>, Error> {
-    crate::repository::delete(&state.db, member.owner(), &input).await?;
-    Ok(Settings::items()
-        .patch_remove(&[input.id], |i| i.at(Summary::id()))
-        .into())
 }
 pub async fn load(state: AppState, member: Member, id: String) -> Result<Patches<Settings>, Error> {
     let row = crate::repository::load(&state.db, member.owner(), &id).await?;
@@ -264,7 +277,7 @@ mod tests {
         assert!(event.contains("upsert"));
         let serialized = serde_json::to_value(form).unwrap();
         assert_eq!(serialized["initial"], serialized["value"]);
-        assert!(summary(&editor(), now, now).ok().unwrap().next_at.is_some());
+        assert_eq!(summary(&editor(), now, now).ok().unwrap().state, "active");
     }
     #[test]
     fn duplicate_ids_overlapping_pauses_and_invalid_domain_values_are_refused() {

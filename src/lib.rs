@@ -15,6 +15,7 @@ mod assets;
 mod auth;
 mod auth_store;
 pub mod domain;
+mod failure;
 pub mod form_fields;
 mod medication_edit;
 pub mod medication_form;
@@ -27,6 +28,7 @@ mod oidc;
 mod pause_edit;
 mod push;
 mod repository;
+mod schedule_status;
 pub mod schedule_view;
 mod session_state;
 mod session_store;
@@ -436,7 +438,7 @@ async fn fetch(
         .action(DOUBLE, double)
         .action(SAVE, save)
         .action(medications::SAVE, medications::save)
-        .action(medications::DELETE, medications::delete)
+        .action(medication_list::REMOVE, medication_list::remove)
         .action(medications::LOAD, medications::load)
         .action(
             medication_edit::SAVE_MEDICATION,

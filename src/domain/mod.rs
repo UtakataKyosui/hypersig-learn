@@ -221,6 +221,14 @@ impl PausePeriod {
         }
     }
     #[must_use]
+    pub fn start(self) -> LocalDate {
+        self.start
+    }
+    #[must_use]
+    pub fn end(self) -> LocalDate {
+        self.end
+    }
+    #[must_use]
     pub fn overlaps(self, other: Self) -> bool {
         self.start <= other.end && other.start <= self.end
     }

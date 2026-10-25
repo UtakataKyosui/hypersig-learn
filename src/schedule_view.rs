@@ -52,3 +52,46 @@ pub fn query(medication: &Medication, now: Timestamp) -> Result<ScheduleView, In
         next: medication.next(now)?.into(),
     })
 }
+
+/// `at` as `YYYY-MM-DD HH:mm` on the Asia/Tokyo calendar. The offset is added
+/// by hand, so neither the server's nor the browser's time zone matters.
+/// Empty for a clock outside the supported calendar.
+#[must_use]
+pub fn tokyo_text(at: Timestamp) -> String {
+    let instant = UtcInstant(at.as_millis());
+    let Ok(date) = instant.tokyo_date() else {
+        return String::new();
+    };
+    let minutes = (instant.0 + 32_400_000).rem_euclid(86_400_000) / 60_000;
+    format!("{date} {:02}:{:02}", minutes / 60, minutes % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokyo_text_adds_nine_hours_whatever_the_host_zone_is() {
+        // 2026-10-26 15:30 UTC is already the next day in Tokyo.
+        let utc = |text: &str| {
+            let (date, time) = text.split_once(' ').unwrap();
+            // `at` reads its arguments as Tokyo time; nine hours on top
+            // read them as UTC.
+            let tokyo = date
+                .parse::<crate::domain::LocalDate>()
+                .unwrap()
+                .at(time.parse().unwrap());
+            Timestamp::from_millis(tokyo.0 + 32_400_000)
+        };
+        assert_eq!(tokyo_text(utc("2026-10-26 15:30")), "2026-10-27 00:30");
+        assert_eq!(tokyo_text(utc("2026-10-26 14:59")), "2026-10-26 23:59");
+        assert_eq!(tokyo_text(utc("2026-12-31 15:00")), "2027-01-01 00:00");
+        assert_eq!(tokyo_text(Timestamp::from_millis(0)), "1970-01-01 09:00");
+        assert_eq!(tokyo_text(Timestamp::from_millis(-1)), "1970-01-01 08:59");
+    }
+
+    #[test]
+    fn tokyo_text_is_empty_outside_the_calendar() {
+        assert_eq!(tokyo_text(Timestamp::from_millis(i64::MAX / 2)), "");
+    }
+}

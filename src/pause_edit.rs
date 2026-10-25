@@ -11,7 +11,7 @@ use crate::{
     medication_edit::{EditPage, Target, target_patch},
     medication_input::PauseInput,
     medications::{self, Editor, Error, Pause},
-    schedule_view::{self, NextPlannedDose, TIMEZONE_LABEL},
+    schedule_status,
 };
 use hypersig::html::{Class, El, div, li, p, span, ul};
 use hypersig::{Action, FieldErrors, Form, Patches, SignalPatch, Signals, Timestamp, if_else};
@@ -89,51 +89,23 @@ pub struct Standing {
 }
 
 /// The standing of `editor` at `now` (Unix milliseconds), from the same
-/// schedule computation the notifications use.
+/// schedule computation the list page and the notifications use.
 #[must_use]
 pub fn standing(editor: &Editor, now: i64) -> Standing {
-    let Ok(medication) = editor.domain(now) else {
-        return Standing {
-            paused: String::new(),
-            next: String::new(),
-        };
-    };
-    let Ok(view) = schedule_view::query(&medication, Timestamp::from_millis(now)) else {
-        return Standing {
-            paused: String::new(),
-            next: String::new(),
-        };
-    };
-    let paused = UtcInstant(now)
-        .tokyo_date()
+    editor
+        .domain(now)
         .ok()
-        .and_then(|today| {
-            medication
-                .pauses
-                .iter()
-                .zip(&editor.pauses)
-                .find(|(period, _)| period.contains(today))
-        })
-        .map_or_else(String::new, |(_, pause)| {
-            format!(
-                "今日は休薬中です（{} 〜 {}）。",
-                pause.input.start, pause.input.end
-            )
-        });
-    let next = match view.next {
-        NextPlannedDose::Disabled => "通知が無効のため、次回の予定はありません。".to_owned(),
-        NextPlannedDose::Ended => "服薬期間が終了しています。".to_owned(),
-        NextPlannedDose::NoUpcoming => "次回の予定はありません。".to_owned(),
-        NextPlannedDose::At(dose) => {
-            let time = editor
-                .slots
-                .iter()
-                .find(|slot| slot.id == dose.slot_id)
-                .map_or("", |slot| slot.input.time.as_str());
-            format!("次回の通知: {} {time}（{TIMEZONE_LABEL}）", dose.local_date)
-        }
-    };
-    Standing { paused, next }
+        .and_then(|medication| schedule_status::assess(&medication, UtcInstant(now)).ok())
+        .map_or_else(
+            || Standing {
+                paused: String::new(),
+                next: String::new(),
+            },
+            |assessment| Standing {
+                paused: schedule_status::paused_text(&assessment),
+                next: schedule_status::next_text(&assessment),
+            },
+        )
 }
 
 /// The signals that show the standing of `editor` as of now.

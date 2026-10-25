@@ -15,14 +15,13 @@ use crate::{
     medications::{self, Editor, Error, Slot},
     pause_edit::{self, PauseView},
 };
-use axum::http::StatusCode;
 use hypersig::html::{Class, El, a, div, each_keyed, fieldset, h1, legend, li, main, p, span, ul};
 use hypersig::{Action, FieldErrors, Form, Page, Patches, SignalPatch, Signals, if_else};
 use hypersig_ui::{
-    AlertVariant, ButtonSize, ButtonVariant, Level, NumberField, TextField, alert,
+    AlertVariant, ButtonSize, ButtonVariant, Dialog, Level, NumberField, TextField, alert,
     alert_description, alert_title, button, card, card_content, card_description, card_header,
-    card_title, checkbox_in_form, radio_group_in_form, select_field_in_form, submit_button,
-    switch_in_form,
+    card_title, checkbox_in_form, dialog_footer, radio_group_in_form, select_field_in_form,
+    submit_button, switch_in_form,
 };
 use serde::{Deserialize, Serialize};
 use std::ops::Not as _;
@@ -40,11 +39,14 @@ pub struct Target {
 pub struct EditPage {
     pub target: Target,
     pub medication: Form<MedicationForm>,
+    /// The dose slots, earliest time first.
     pub slots: Vec<SlotView>,
     /// The dose slot form: adds a slot, or edits the one named by `editing`.
     pub slot: Form<DoseSlotInput>,
     /// The id of the dose slot `slot` edits, or `""` while it adds one.
     pub editing: String,
+    /// The summary line of that slot, for the delete dialog.
+    pub editing_label: String,
     pub busy: bool,
     pub slot_busy: bool,
     pub notice: String,
@@ -120,9 +122,10 @@ pub fn render(editor: &Editor) -> Page<EditPage> {
             &editor.medication,
             editor.enabled,
         )),
-        slots: editor.slots.iter().cloned().map(SlotView::from).collect(),
+        slots: slot_views(editor),
         slot: Form::new(blank_slot()),
         editing: String::new(),
+        editing_label: String::new(),
         busy: false,
         slot_busy: false,
         notice: String::new(),
@@ -146,6 +149,18 @@ pub fn render(editor: &Editor) -> Page<EditPage> {
         .child(view())
 }
 
+/// The dose slots of `editor`, earliest time first. The times are `HH:mm`,
+/// so the text order is the clock order.
+#[must_use]
+pub fn slot_views(editor: &Editor) -> Vec<SlotView> {
+    let mut views: Vec<_> = editor.slots.iter().cloned().map(SlotView::from).collect();
+    views.sort_by(|a, b| (&a.input.time, &a.id).cmp(&(&b.input.time, &b.id)));
+    views
+}
+
+/// Asks for confirmation before a dose slot is deleted.
+const REMOVE_SLOT_DIALOG: Dialog<EditPage> = Dialog::new("remove-slot");
+
 fn view() -> El<EditPage> {
     main()
         .class(Class::new("med-shell"))
@@ -159,59 +174,15 @@ fn view() -> El<EditPage> {
                 )))
                 .child(a().href(crate::MEDICATIONS.link()).text("一覧へ戻る")),
         )
-        .child(failure_alerts())
+        .child(crate::failure::alerts(
+            EditPage::problem(),
+            EditPage::status(),
+        ))
         .child(pause_edit::standing_banner())
         .child(medication_card())
         .child(slots_card())
         .child(pause_edit::pauses_card())
         .child(crate::auth::sign_out_button())
-}
-
-/// Communication and storage failures. Input mistakes are not here: they
-/// show under the field they belong to.
-fn failure_alerts() -> El<EditPage> {
-    let problem = EditPage::problem();
-    let status = EditPage::status();
-    let signed_out = status.equals(i32::from(StatusCode::UNAUTHORIZED.as_u16()));
-    let offline = problem.is_empty().not().and(status.equals(0));
-    let refused = problem
-        .is_empty()
-        .not()
-        .and(status.equals(0).not())
-        .and(signed_out.clone().not());
-    div()
-        .class(Class::new("med-pad"))
-        .child(
-            alert(AlertVariant::Destructive)
-                .show(signed_out)
-                .child(alert_title().text("ログインの有効期限が切れました"))
-                .child(
-                    alert_description()
-                        .child(span().text(
-                            "入力内容はこの画面に残っています。別のタブでログインし直してから、もう一度保存してください。",
-                        ))
-                        .child(
-                            a().href(crate::auth::LOGIN.link())
-                                .attr("target", "_blank")
-                                .attr("rel", "noopener")
-                                .text("ログインし直す"),
-                        ),
-                ),
-        )
-        .child(
-            alert(AlertVariant::Destructive)
-                .show(offline)
-                .child(alert_title().text("通信できませんでした"))
-                .child(alert_description().text(
-                    "接続を確認して、もう一度保存してください。入力内容は残っています。",
-                )),
-        )
-        .child(
-            alert(AlertVariant::Destructive)
-                .show(refused)
-                .child(alert_title().text("保存できませんでした"))
-                .child(alert_description().bind_text(problem)),
-        )
 }
 
 fn medication_card() -> El<EditPage> {
@@ -347,7 +318,8 @@ fn slots_card() -> El<EditPage> {
                         .text("服薬枠がまだありません。下のフォームから追加してください。"),
                 )
                 .child(slot_list().show(saved.clone()))
-                .child(slot_form().show(saved)),
+                .child(slot_form().show(saved.clone()))
+                .child(remove_slot_dialog().show(saved)),
         )
 }
 
@@ -379,7 +351,8 @@ fn slot_list() -> El<EditPage> {
                         .on_click(
                             slot.reset()
                                 .then(slot.value().set(item.at(SlotView::input())))
-                                .then(EditPage::editing().set(item.at(SlotView::id()))),
+                                .then(EditPage::editing().set(item.at(SlotView::id())))
+                                .then(EditPage::editing_label().set(item.at(SlotView::summary()))),
                         )
                         .text("編集"),
                 )
@@ -394,11 +367,6 @@ fn slot_form() -> El<EditPage> {
     let adding = editing.is_empty();
     let save = SAVE_SLOT
         .call_with((EditPage::target(), editing, form.value()))
-        .indicator(slot_busy)
-        .error(EditPage::problem())
-        .status(EditPage::status());
-    let remove = REMOVE_SLOT
-        .call_with((EditPage::target(), editing))
         .indicator(slot_busy)
         .error(EditPage::problem())
         .status(EditPage::status());
@@ -468,13 +436,39 @@ fn slot_form() -> El<EditPage> {
                         .text("編集をやめる"),
                 )
                 .child(
-                    button(ButtonVariant::Destructive, ButtonSize::Lg)
+                    REMOVE_SLOT_DIALOG
+                        .trigger(ButtonVariant::Destructive, ButtonSize::Lg)
                         .show(adding.not())
                         .disabled(slot_busy)
-                        .on_click(remove)
                         .text("この枠を削除"),
                 ),
         )
+}
+
+fn remove_slot_dialog() -> El<EditPage> {
+    let remove = REMOVE_SLOT
+        .call_with((EditPage::target(), EditPage::editing()))
+        .indicator(EditPage::slot_busy())
+        .error(EditPage::problem())
+        .status(EditPage::status());
+    REMOVE_SLOT_DIALOG.alert_dialog(
+        "服薬枠を削除しますか",
+        "削除すると、この枠の時刻には通知されなくなります。元に戻すには、もう一度追加します。",
+        div().child(p().bind_text(EditPage::editing_label())).child(
+            dialog_footer()
+                .child(
+                    REMOVE_SLOT_DIALOG
+                        .close(ButtonVariant::Outline, ButtonSize::Default)
+                        .text("やめる"),
+                )
+                .child(
+                    REMOVE_SLOT_DIALOG
+                        .close(ButtonVariant::Destructive, ButtonSize::Default)
+                        .on_click(remove)
+                        .text("削除する"),
+                ),
+        ),
+    )
 }
 
 /// The page after the medication was saved: the form starts from the saved
@@ -502,28 +496,27 @@ fn slot_form_reset() -> SignalPatch<EditPage> {
     EditPage::slot()
         .patch(Form::new(blank_slot()))
         .and(EditPage::editing().patch(String::new()))
+        .and(EditPage::editing_label().patch(String::new()))
 }
 
-fn slot_saved(editor: &Editor, slot: SlotView) -> Patches<EditPage> {
-    Patches::new()
-        .signals(
-            target_patch(editor)
-                .and(slot_form_reset())
-                .and(pause_edit::standing_patch(editor))
-                .and(EditPage::slot_notice().patch("服薬枠を保存しました。".to_owned())),
-        )
-        .list(EditPage::slots().patch_upsert(&[slot], |slot| slot.at(SlotView::id())))
+fn slot_saved(editor: &Editor) -> Patches<EditPage> {
+    slots_changed(editor, "服薬枠を保存しました。")
 }
 
-fn slot_removed(editor: &Editor, id: String) -> Patches<EditPage> {
-    Patches::new()
-        .signals(
-            target_patch(editor)
-                .and(slot_form_reset())
-                .and(pause_edit::standing_patch(editor))
-                .and(EditPage::slot_notice().patch("服薬枠を削除しました。".to_owned())),
-        )
-        .list(EditPage::slots().patch_remove(&[id], |slot| slot.at(SlotView::id())))
+fn slot_removed(editor: &Editor) -> Patches<EditPage> {
+    slots_changed(editor, "服薬枠を削除しました。")
+}
+
+/// The whole slot list goes out again, in time order: an upsert would put a
+/// new slot last, and the list keeps each row by its key across the reorder.
+fn slots_changed(editor: &Editor, notice: &str) -> Patches<EditPage> {
+    Patches::new().signals(
+        target_patch(editor)
+            .and(slot_form_reset())
+            .and(EditPage::slots().patch(slot_views(editor)))
+            .and(pause_edit::standing_patch(editor))
+            .and(EditPage::slot_notice().patch(notice.to_owned())),
+    )
 }
 
 /// Messages for the field they belong to, shown until the next submit.
@@ -631,13 +624,12 @@ pub async fn save_slot(
         return Err(Error::Missing);
     }
     let mut editor = stored(&state, &member, &target).await?;
-    let view = match upsert_slot(&mut editor, &slot_id, &medications::random_id()?, input)? {
-        Ok(view) => view,
-        Err(errors) => return Ok(rejected(EditPage::slot(), &errors)),
-    };
+    if let Err(errors) = upsert_slot(&mut editor, &slot_id, &medications::random_id()?, input)? {
+        return Ok(rejected(EditPage::slot(), &errors));
+    }
     let now = hypersig::Timestamp::now().as_millis();
     let saved = medications::commit(&state, &member, editor, now).await?;
-    Ok(slot_saved(&saved, view))
+    Ok(slot_saved(&saved))
 }
 
 /// Removes the slot `slot_id` from `editor`.
@@ -662,7 +654,7 @@ pub async fn remove_slot(
     remove_slot_from(&mut editor, &slot_id)?;
     let now = hypersig::Timestamp::now().as_millis();
     let saved = medications::commit(&state, &member, editor, now).await?;
-    Ok(slot_removed(&saved, slot_id))
+    Ok(slot_removed(&saved))
 }
 
 #[cfg(test)]
@@ -670,6 +662,7 @@ mod tests {
     use super::*;
     use crate::medication_input::PauseInput;
     use crate::medications::Pause;
+    use axum::http::StatusCode;
     use axum::response::IntoResponse as _;
 
     fn saved_editor() -> Editor {
@@ -867,16 +860,21 @@ mod tests {
     }
 
     #[test]
-    fn slot_patches_use_stable_ids_and_reset_the_slot_form() {
+    fn slot_patches_send_the_list_in_time_order_and_reset_the_slot_form() {
         let mut editor = saved_editor();
-        let view = added(&mut editor, "slot-a", slot("08:00", "1", "after_meal"));
+        added(&mut editor, "slot-b", slot("20:00", "1", "bedtime"));
+        added(&mut editor, "slot-a", slot("08:00", "1", "after_meal"));
         editor.revision = 4;
-        let patches = slot_saved(&editor, view);
-        let events = patches.to_event_stream();
-        assert!(events.contains("upsert"), "{events}");
-        assert!(events.contains("slot-a"), "{events}");
+        let patches = slot_saved(&editor);
+        let list = patches.value_of(EditPage::slots()).unwrap();
+        let ids: Vec<_> = list.iter().map(|view| view.id.as_str()).collect();
+        assert_eq!(ids, ["slot-a", "slot-b"]);
         assert_eq!(patches.value_of(EditPage::target()).unwrap().revision, 4);
         assert_eq!(patches.value_of(EditPage::editing()).as_deref(), Some(""));
+        assert_eq!(
+            patches.value_of(EditPage::editing_label()).as_deref(),
+            Some("")
+        );
         let form = patches.value_of(EditPage::slot()).unwrap();
         let json = serde_json::to_value(&form).unwrap();
         assert_eq!(json["initial"], json["value"]);
@@ -886,8 +884,27 @@ mod tests {
             remove_slot_from(&mut editor, "slot-a"),
             Err(Error::Missing)
         ));
-        let events = slot_removed(&editor, "slot-a".into()).to_event_stream();
-        assert!(events.contains("remove_keys"), "{events}");
+        let patches = slot_removed(&editor);
+        let list = patches.value_of(EditPage::slots()).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "slot-b");
+    }
+
+    #[test]
+    fn deleting_a_slot_asks_first_and_failures_have_their_alerts() {
+        let mut editor = saved_editor();
+        added(&mut editor, "slot-a", slot("08:00", "1", "after_meal"));
+        let html = render(&editor).render();
+        assert!(
+            html.contains(r#"aria-labelledby="remove-slot-title""#),
+            "{html}"
+        );
+        assert!(html.contains("服薬枠を削除しますか"), "{html}");
+        assert!(html.contains(REMOVE_SLOT.path()), "{html}");
+        assert!(html.contains("ログインの有効期限が切れました"), "{html}");
+        assert!(html.contains("通信できませんでした"), "{html}");
+        // The delete call is made by the dialog's confirm button only.
+        assert_eq!(html.matches(REMOVE_SLOT.path()).count(), 1, "{html}");
     }
 
     #[test]

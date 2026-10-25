@@ -14,6 +14,9 @@ pub const STYLE: Stylesheet = Stylesheet::new(
 .med-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .75rem; }
 .med-item-text { display: grid; gap: .25rem; min-width: 0; overflow-wrap: anywhere; }
 .med-muted { color: var(--muted-foreground, #6b6b74); font-size: .875rem; margin: 0; }
+.med-status { font-size: .875rem; font-weight: 600; }
+.med-status[data-state='paused'] { color: var(--primary, #1a56db); }
+.med-status[data-state='disabled'], .med-status[data-state='ended'], .med-status[data-state='empty'] { color: var(--muted-foreground, #6b6b74); }
 .med-link { color: inherit; font-weight: 600; }
 .med-pad { padding-inline: 1.5rem; margin: 0; }
 ",
