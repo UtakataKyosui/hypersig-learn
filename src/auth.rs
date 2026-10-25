@@ -62,7 +62,8 @@ where
 {
     let identity = session_state::current(session).await?;
     let user = lookup(identity.user_id.clone()).await?;
-    session_state::honoured(&identity, &user).then_some(Member(user.id))
+    session_state::honoured(&identity, &user, auth_store::now_ms() / 1000)
+        .then_some(Member(user.id))
 }
 
 fn public(path: &str) -> bool {
@@ -170,11 +171,12 @@ impl Notice {
 
 async fn page(_: AppState, session: Session, (): ()) -> Page<Login> {
     use hypersig::html::{a, div, p};
-    let problem = session
-        .remove::<String>(NOTICE)
-        .await
-        .ok()
-        .flatten()
+    let notice = session.get::<String>(NOTICE).await.ok().flatten();
+    if notice.is_some() {
+        pin(&session).await;
+        let _ = session.remove::<String>(NOTICE).await;
+    }
+    let problem = notice
         .map(|code| Notice::message(&code).to_owned())
         .unwrap_or_default();
     Page::new(
@@ -221,8 +223,16 @@ fn log_failure(kind: &str) {
     let _ = kind;
 }
 
+/// Keeps a signed-in session's deadline when a sign-in route changes it.
+async fn pin(session: &Session) {
+    if let Some(identity) = session_state::current(session).await {
+        session_state::pin_expiry(session, &identity);
+    }
+}
+
 /// Sends the visitor back to the login page with a fixed notice.
 async fn rejected(session: &Session, notice: Notice) -> Response {
+    pin(session).await;
     let _ = session.insert(NOTICE, notice.code()).await;
     private(Redirect::to(LOGIN.url(()).as_str()).into_response())
 }
@@ -246,6 +256,7 @@ fn private(mut response: Response) -> Response {
     reason = "a page handler answers with an arbitrary response through its `Err`"
 )]
 async fn start(state: AppState, session: Session, (): ()) -> Result<PageResponse, Response> {
+    pin(&session).await;
     let now = auth_store::now_ms();
     let flow = async {
         let started = oidc::start(&oidc::Fetch, &state.oidc).await.ok()?;
@@ -512,6 +523,27 @@ mod tests {
             ),
             StatusCode::SEE_OTHER
         );
+    }
+
+    #[test]
+    fn a_session_past_its_deadline_is_refused_even_if_the_store_still_holds_it() {
+        let store = Arc::new(Memory::default());
+        let a = user(1, "active");
+        let cookie = futures::executor::block_on(async {
+            let session = Session::new(None, store.clone(), None);
+            let signed_in = OffsetDateTime::now_utc() - session_state::LIFETIME * 2;
+            session_state::sign_in(&session, &a, signed_in)
+                .await
+                .unwrap();
+            session.save().await.unwrap();
+            format!("id={}", session.id().unwrap())
+        });
+        let app = app(&store, vec![a]);
+        let response = send(
+            &app,
+            get_with(crate::MEDICATIONS.path(), Some(&cookie), true),
+        );
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
     }
 
     #[test]

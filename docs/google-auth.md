@@ -71,7 +71,7 @@ sequenceDiagram
 - Cookie は `__Host-session`（HttpOnly・Secure・SameSite=Lax・Path=/、Domain なし）で、ランダムな128ビットのセッション ID だけを持つ。Google の token と PKCE verifier は Cookie にもセッションにも入れない（verifier は `oauth_flows`、削除前提の短期保存）。
 - D1 の `sessions` はセッション ID の SHA-256 をキーにする。表のコピーからは Cookie の値を復元できない。
 - ログイン前（フロー用）は15分の無操作で期限切れ。ログイン成功時に `cycle_id()` で ID を変え、サインイン後の有効期限は**絶対 24 時間**（操作では延びない）。ログアウトは `flush()` で D1 の記録を消し Cookie を消す。
-- サーバー側の認証状態: 利用者 ID、`session_version`、認証強度（`Google`／`Additional`）。`Additional` への昇格は `session_state::promote` だけが行い、ブラウザの値では変わらない（Passkey は今回未実装）。
+- サーバー側の認証状態（セッション内の `identity`）: 利用者 ID、`session_version`、認証強度（`Google`／`Additional`）、終了時刻 `expires_at`。`tower-sessions` はリクエストごとの設定から有効期限を計算し直して保存するため、24時間の上限は `expires_at` を読み出し時に検証して守る。ログイン用ルートがログイン済みセッションを書き換えるときは、`pin_expiry` で保存される期限も固定する。`Additional` への昇格は `session_state::promote` だけが行い、ブラウザの値では変わらない（Passkey は今回未実装）。
 - すべてのリクエストで `users` を引き、`status = 'active'` かつ `session_version` が一致しなければ未認証として扱う。
 
 運用操作（`wrangler d1 execute app --remote --command "…"`）:
@@ -90,7 +90,7 @@ sequenceDiagram
 | `migrations/0002_auth.sql` | `users`・`external_identities`・`sessions`・`oauth_flows` | `migrations/rollback/0002_auth_down.sql` |
 | `migrations/0003_owner_isolation.sql` | 利用者別の `push_probe`・`counters`、配信の所有者トリガー、移行記録 | `migrations/rollback/0003_owner_isolation_down.sql` |
 
-`wrangler d1 migrations apply` は前進のみ。切り戻しファイルは `wrangler d1 execute --file` で手動実行し、それ以前に旧版の Worker に戻しておく（新版の Worker は新テーブルを前提にする）。0001 の既存の服薬・購読データには触れない。単一所有者データの引き継ぎと切り戻しは [data-isolation.md](data-isolation.md)。
+`wrangler d1 migrations apply` は前進のみ。切り戻しファイルは `wrangler d1 execute --file` で手動実行する。0003 を先に、0002 を後に実行する（`legacy_owner_migration` が `users` を参照するため）。その前に旧版の Worker に戻しておく（新版の Worker は新テーブルを前提にする）。0001 の既存の服薬・購読データには触れない。単一所有者データの引き継ぎと切り戻しは [data-isolation.md](data-isolation.md)。
 
 デプロイの順序: ① GitHub Secrets を3つ登録 → ② Google Cloud の redirect URI を登録 → ③ merge（CI が migration → Worker の順に適用）→ ④ 移行先の利用者が一度ログイン → ⑤ `scripts/legacy-owner.sh` で既存データを引き継ぐ。④⑤の前でも新規利用者は使えるが、旧データは `owner='owner'` のまま誰からも見えない。
 
@@ -98,6 +98,7 @@ sequenceDiagram
 
 自動テストでは実際の Google ログインを実行できない。次は利用者の環境で確認し、結果を PR に記録する。
 
+- [ ] 実際のブラウザで「Google でログイン」のリンクを押し、Google の画面へ遷移すること（HTML 上は `<a href="/auth/google">` のみで、hypersig のランタイムが介入しないことはソースで確認済みだが、ブラウザでの操作は未実施）。
 - [ ] HTTPS の環境（本番、または信頼済み証明書のローカル）で、2つの Google アカウントの初回ログインと再ログイン。
 - [ ] 2アカウントのデータ分離（片方が作った服薬が他方に見えない）、ログアウト、旧 Cookie（`__Host-medication`）での拒否。
 - [ ] Safari とホーム画面に追加した PWA でのログインと再読み込み後の維持。Safari の HTTP localhost は Secure Cookie を保持しない。
@@ -111,13 +112,13 @@ sequenceDiagram
 |---|---|---|
 | Rust | `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` | OIDC の検証（不正な署名・iss・aud・nonce・azp・期限・アルゴリズム・鍵更新）、固定ホスト制限、セッション状態、`Member`・リダイレクト／401 |
 | wasm | `cargo check --target wasm32-unknown-unknown` | |
-| SQL | `python3 scripts/test-persistence.py` | migration の適用・切り戻し、フローの一度きりの消費、同時の初回ログイン、所有者分離、引き継ぎ・切り戻し |
+| SQL | `python3 scripts/test-persistence.py` | migration の適用・切り戻し、フローの一度きりの消費、別接続からの重複した初回ログイン（条件付き INSERT と一意制約）、所有者分離、引き継ぎ・切り戻し。並行実行そのものの保証は、D1 が batch を直列に実行することに依る |
 | Worker | `scripts/test-worker.py`（`wrangler dev` に対して） | 実際の workerd 上で、Google の Discovery への到達、ログイン開始の redirect と Cookie 属性、callback の不正入力・再利用、シード済みセッションでの2利用者の分離・失効・ログアウト |
 | ビルド | `sh scripts/build.sh` | `worker-build --release` |
 
 `scripts/test-worker.py` は Google アカウントを使わない。`scripts/auth_fixture.py` がローカル D1 に利用者とセッションの行を直接書く。本番コードにテスト用のログイン経路はない。
 
-最小依存での `cargo check` の結果と、Workers 上の実行結果は区別して扱う。Workers 上では、Google の Discovery（鍵取得を含む）の実通信とトークンエンドポイントへの到達（偽のコードは `invalid_grant` で拒否）まで確認した。正規のコードによる交換と ID token の検証は、上の「確認する項目」のとおり実際のログインでのみ確認できる。
+最小依存での `cargo check` の結果と、Workers 上の実行結果は区別して扱う。Workers 上では、Google の Discovery（鍵取得を含む）の実通信とトークンエンドポイントへの到達（偽のクライアント設定と偽のコードでの交換が拒否され、`auth: Exchange` の分類でログイン画面に戻る）まで確認した。拒否の理由コードは確認していない。正規のコードによる交換と ID token の検証は、上の「確認する項目」のとおり実際のログインでのみ確認できる。
 
 ## 制約と未対応
 

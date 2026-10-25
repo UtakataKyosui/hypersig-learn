@@ -105,8 +105,28 @@ assert r.headers['Location'] == '/login'
 (r, _) = request(f'/auth/google/callback?state={state}&code=x', expected=303, cookie=flow_cookie)
 assert not auth_fixture.query(PERSIST, f"SELECT 1 FROM oauth_flows WHERE state='{state}'")
 
-# A signed-in user.
+# A signed-in user. The login page links to the sign-in start route with a plain anchor.
+(_, login_html) = page('/login', 200)
+assert re.search(r'<a [^>]*href="/auth/google"', login_html), login_html
 page('/medications', 200, cookie_a)
+(_, notifications_html) = page('/notifications', 200, cookie_a)
+assert f'利用者 ID: {user_a}' in notifications_html and user_b not in notifications_html
+# Touching a signed-in session on a sign-in route cannot move its deadline.
+def deadline(cookie):
+    import base64, hashlib
+    session_id = cookie.split('=', 1)[1]
+    key = base64.urlsafe_b64encode(hashlib.sha256(session_id.encode()).digest()).rstrip(b'=').decode()
+    return auth_fixture.query(PERSIST, f"SELECT expires_at FROM sessions WHERE id='{key}'")[0]['expires_at'] // 1000
+before = deadline(cookie_a)
+(r, _) = request('/auth/google', expected=303, cookie=cookie_a)
+assert deadline(cookie_a) == before
+request('/auth/google/callback?state=none&code=x', expected=303, cookie=cookie_a)
+assert deadline(cookie_a) == before
+page('/login', 200, cookie_a)
+assert deadline(cookie_a) == before
+# The deadline inside the record is what counts: a stored row that outlives it is refused.
+stale = auth_fixture.new_session(PERSIST, user_a, lifetime_s=-60, row_lifetime_s=3600)
+request('/medications/load', 'x', 401, cookie=stale)
 e = {'id': 'runtime-med-' + suffix, 'revision': 0, 'enabled': True, 'medication': {'name': 'test medication', 'start': '2026-10-01', 'end': '', 'repeat': 'daily', 'interval': 1, 'weekdays': 0}, 'slots': [{'id': 'runtime-slot-' + suffix, 'input': {'time': '08:00', 'amount': '0.5', 'unit': 'tablet', 'timing': 'after_meal', 'note': ''}}], 'pauses': []}
 (r, body) = request('/medications/save', e, cookie=cookie_a)
 assert 'upsert' in body and 'initial' in body and r.headers['Cache-Control'] == 'no-store'

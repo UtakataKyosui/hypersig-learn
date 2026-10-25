@@ -41,17 +41,22 @@ def add_user(persist_dir, user_id, status="active", version=1):
     execute(persist_dir, f"INSERT INTO users(id,status,session_version,created_at) VALUES('{user_id}','{status}',{version},1000)")
 
 
-def new_session(persist_dir, user_id, version=1, lifetime_s=3600):
-    """Returns the Cookie header value of a signed-in session for `user_id`."""
+def new_session(persist_dir, user_id, version=1, lifetime_s=3600, row_lifetime_s=None):
+    """Returns the Cookie header value of a signed-in session for `user_id`.
+
+    `lifetime_s` is the session's own deadline; `row_lifetime_s` is how long the
+    stored row lasts, which defaults to the same."""
     number = secrets.randbits(127)
     session_id = _b64(number.to_bytes(16, "little"))
-    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=lifetime_s)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expires = now + datetime.timedelta(seconds=lifetime_s)
+    row_expires = now + datetime.timedelta(seconds=lifetime_s if row_lifetime_s is None else row_lifetime_s)
     record = {
         "id": number,
-        "data": {"identity": {"user_id": user_id, "session_version": version, "level": "Google"}},
-        "expiry_date": [expires.year, expires.timetuple().tm_yday, expires.hour, expires.minute, expires.second, 0, 0, 0, 0],
+        "data": {"identity": {"user_id": user_id, "session_version": version, "level": "Google", "expires_at": int(expires.timestamp())}},
+        "expiry_date": [row_expires.year, row_expires.timetuple().tm_yday, row_expires.hour, row_expires.minute, row_expires.second, 0, 0, 0, 0],
     }
     key = _b64(hashlib.sha256(session_id.encode()).digest())
     body = json.dumps(record).replace("'", "''")
-    execute(persist_dir, f"INSERT INTO sessions(id,record,expires_at) VALUES('{key}','{body}',{int(expires.timestamp() * 1000)})")
+    execute(persist_dir, f"INSERT INTO sessions(id,record,expires_at) VALUES('{key}','{body}',{int(row_expires.timestamp() * 1000)})")
     return f"{COOKIE}={session_id}"
