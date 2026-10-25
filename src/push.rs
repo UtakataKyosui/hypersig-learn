@@ -11,9 +11,9 @@ use hkdf::Hkdf;
 use p256::ecdh::diffie_hellman;
 use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::elliptic_curve::Generate as _;
+use p256::elliptic_curve::sec1::ToSec1Point as _;
 use p256::{PublicKey, SecretKey};
-use rand_core::{OsRng, RngCore as _};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use worker::{Fetch, Headers, Method, Request, RequestInit};
@@ -69,8 +69,8 @@ pub fn encrypt_with(
     salt: [u8; 16],
 ) -> Result<Vec<u8>, PushError> {
     let (receiver, auth) = decode_keys(subscription)?;
-    let sender_public = sender.public_key().to_encoded_point(false);
-    let receiver_point = receiver.to_encoded_point(false);
+    let sender_public = sender.public_key().to_sec1_point(false);
+    let receiver_point = receiver.to_sec1_point(false);
 
     let shared = diffie_hellman(sender.to_nonzero_scalar(), receiver.as_affine());
     let mut key_info = b"WebPush: info\0".to_vec();
@@ -94,7 +94,7 @@ pub fn encrypt_with(
     record.push(2);
     let cipher = Aes128Gcm::new_from_slice(&key).map_err(|_| PushError::Encrypt)?;
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), record.as_slice())
+        .encrypt(&Nonce::from(nonce), record.as_slice())
         .map_err(|_| PushError::Encrypt)?;
 
     let mut body = Vec::with_capacity(86 + ciphertext.len());
@@ -108,9 +108,10 @@ pub fn encrypt_with(
 
 /// Encrypts with a fresh key and salt.
 pub fn encrypt(subscription: &Subscription, plaintext: &[u8]) -> Result<Vec<u8>, PushError> {
-    let sender = SecretKey::random(&mut OsRng);
+    let sender =
+        SecretKey::try_generate_from_rng(&mut getrandom::SysRng).map_err(|_| PushError::Encrypt)?;
     let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
+    getrandom::fill(&mut salt).map_err(|_| PushError::Encrypt)?;
     encrypt_with(subscription, plaintext, &sender, salt)
 }
 
@@ -139,7 +140,7 @@ pub fn vapid_authorization(
     );
     let signing_input = format!("{header}.{claims}");
     let signature: Signature = signing.sign(signing_input.as_bytes());
-    let public = signing.verifying_key().to_encoded_point(false);
+    let public = signing.verifying_key().to_sec1_point(false);
     Ok(format!(
         "vapid t={signing_input}.{}, k={}",
         B64.encode(signature.to_bytes()),
@@ -251,7 +252,7 @@ mod tests {
     fn vapid_token_verifies_with_the_advertised_key() {
         use p256::ecdsa::VerifyingKey;
         use p256::ecdsa::signature::Verifier as _;
-        let secret = SecretKey::random(&mut OsRng);
+        let secret = SecretKey::try_generate_from_rng(&mut getrandom::SysRng).unwrap();
         let private = B64.encode(secret.to_bytes());
         let header = vapid_authorization(
             "https://push.example.net/push/abc",
