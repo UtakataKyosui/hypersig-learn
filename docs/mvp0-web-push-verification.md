@@ -12,7 +12,8 @@ Issue #2（親 #1）の検証結果。`hypersig` / `hypersig_ui` 0.4.1、`worker
 | `scheduled` 入口から Push サービスへ HTTP 送信できる | ローカル検証済み | `wrangler dev --test-scheduled`。実在しない endpoint を保存し、予定時刻後の `/cdn-cgi/handler/scheduled` で FCM が応答（`Expired`）。予定時刻前は送信しない。2 回続けて呼んでも送信は 1 回 |
 | manifest の `<link>` を `<head>` に挿入し、元のヘッダーを保つ | ローカル検証済み | `curl` で `<link rel="manifest">` を確認。単体テストでヘッダー保持と `Content-Length` 除去を確認 |
 | `/sw.js` が `Service-Worker-Allowed: /` 付きで配信される | ローカル検証済み | `curl -i` |
-| `CustomEvent<SubscriptionInput>` → `REGISTER.call_with` の配線 | HTML 出力まで検証済み | 出力の `data-hs-on-custom` に `POST /notifications/subscription` が入る。ブラウザでの実行は未確認 |
+| `CustomEvent<SubscriptionInput>` → `REGISTER.call_with` の配線 | ブラウザで検証済み（localhost） | プレビューブラウザで `push-subscription` を発火：不正 endpoint は「通知の宛先が不正です。」を表示し「未保存」のまま、正しい購読は「保存しました」に変わる。`push-status` の `denied` が「ブラウザの許可」に反映され、許可だけでは保存済みにならない |
+| manifest の読み込みと SW の scope | ブラウザで検証済み（localhost） | manifest を取得でき（scope `/`、`standalone`）、`/sw.js` を scope `/` で登録して active になった。`<push-subscribe>` が定義されボタンが出る |
 | 偽造・欠落・不正鍵のリクエストが成功扱いにならない | 検証済み | `curl`：不正ホスト・不正鍵は 400、`detail` 欠落（`{}`）は 400、購読なしの予約は 409 |
 | iPhone ホーム画面 PWA／Android で閉じた状態の受信と通知クリック | **未検証（実機が必要）** | 下の「実機検証手順」 |
 | `wrangler deploy` した Worker の Cron 実行 | **未検証** | ローカルは `--test-scheduled` で呼んだのみ |
