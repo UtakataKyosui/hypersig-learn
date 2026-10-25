@@ -18,6 +18,7 @@ pub mod domain;
 pub mod medication_input;
 mod medications;
 mod notifications;
+mod oidc;
 mod push;
 mod repository;
 pub mod schedule_view;
