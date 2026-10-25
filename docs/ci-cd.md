@@ -1,12 +1,29 @@
 # CI/CD
 
-`.github/workflows/ci.yml` が pull request と main への push で動く。main への push では、CI が通ったあとに Cloudflare Workers へデプロイする。
+`.github/workflows/ci.yml` が pull request と main への push で動く。品質チェックと WASM チェックを並列に実行し、main では成功後に `.github/workflows/deploy.yml` を呼び出して Cloudflare Workers へデプロイする。デプロイ用ワークフローは `workflow_call` 専用で、PR からは呼ばない。
 
 | ジョブ | 内容 | 実行条件 |
 |---|---|---|
-| `check` | `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` | 常に |
-| `wasm` | `cargo check --target wasm32-unknown-unknown` | 常に |
-| `deploy` | VAPID の設定を確認し、`wrangler deploy` し、`/manifest.webmanifest` が 200 を返すことを確認する | main への push。`check` と `wasm` の成功後 |
+| `changes` | Git の差分から必要なジョブを判定する | Dependabot 作成の PR 以外 |
+| `check` | `cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked` | Rust に影響する変更 |
+| `wasm` | `cargo check --locked --target wasm32-unknown-unknown` | Rust に影響する変更 |
+| `deploy` | VAPID の設定を確認し、`wrangler deploy` し、`/manifest.webmanifest` が 200 を返すことを確認する | main への push で配布に影響する変更。必要なチェックの成功後 |
+
+## 差分実行とキャッシュ
+
+Dependabot が作成した PR は全ジョブを skipped にする。作成者で判定するため、人が再実行してもチェックは省略する。ワークフローの実行記録は残るが、ランナーは起動しない。main へのマージ後は通常どおり検証とデプロイを実行するため、依存更新の互換性エラーはそこで検出される。
+
+`scripts/ci-changes.sh` が PR では merge-base から、push では push 前の SHA から差分を調べる。削除と移動も対象にし、比較元が取得できなければ全チェックを実行する。
+
+- `docs/`、`README.md`、`AGENTS.md`、ライセンス、Dependabot 設定だけの変更は、ビルドとデプロイを省略する。
+- `wrangler.toml` だけの変更は Rust チェックを省略し、main でデプロイする。
+- その他の変更は全チェックを実行する。`assets/` は Rust に埋め込まれるため検証対象。ワークフローやビルドスクリプトの変更も省略しない。
+
+ワークフロー自体は常に起動し、不要なジョブを skipped にする。パスフィルターでワークフローごと省略して必須チェックが Pending のままになる構成は使わない。PR に追加 push されたら古い CI を中断する。main の実行は中断しない。
+
+`Swatinem/rust-cache` は native、WASM check、Worker release を別のキーで保存する。Rust の版、Cargo の依存、設定がキーに含まれ、通常のソース変更では依存のビルド結果を再利用する。release 用は `cache-all-crates` を有効にし、`cargo install` する `worker-build` と Cargo のツール管理ファイルも保持する。npm はダウンロードキャッシュだけを保存し、Wrangler の版をキーに含める。Wrangler の版を上げるときはキャッシュキーも更新する。
+
+キャッシュヒット時も検証コマンドは実行する。速度の改善量は GitHub 上の初回実行とキャッシュ復元後の実行を比較して確認する。
 
 `deploy` は `concurrency: deploy` で直列化し、実行中のデプロイを中断しない。スモークテストが `/` でなく `/manifest.webmanifest` を見るのは、将来ページが未ログインをリダイレクトしても CI が壊れないようにするため。
 
