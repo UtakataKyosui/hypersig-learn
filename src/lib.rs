@@ -21,10 +21,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures::channel::mpsc::{self, UnboundedSender};
 use futures::{Stream, StreamExt as _, future, stream};
-use hypersig::html::{Stylesheet, button, div, h1, p, span, strong};
+use hypersig::html::{Class, Stylesheet, div, h1, main, p, strong};
 use hypersig::{
     Action, DateFormat, DateStyle, IntlLocale, Page, Patches, Route, RouterExt, Signals,
     StreamAction, TimeStyle, Timestamp,
+};
+use hypersig_ui::{
+    AlertVariant, ButtonSize, ButtonVariant, Level, alert, alert_description, alert_title, button,
+    card, card_content, card_description, card_header, card_title,
 };
 use serde::{Deserialize, Serialize};
 use tower_service::Service as _;
@@ -57,8 +61,17 @@ const TIME: DateFormat =
 
 const STYLE: Stylesheet = Stylesheet::new(
     "
-body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; }
-button { font-size: 1rem; padding: .4rem .9rem; }
+.shell { max-width: 44rem; margin: 0 auto; padding: clamp(2rem, 8vw, 5rem) 1rem; }
+.intro { margin-bottom: 2rem; }
+.eyebrow { color: var(--muted-foreground, #6b6b74); font-size: .75rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+h1 { font-size: clamp(2rem, 6vw, 3rem); font-weight: 700; letter-spacing: -.04em; margin: .5rem 0; }
+.muted { color: var(--muted-foreground, #6b6b74); font-size: .875rem; }
+.counter-value { display: block; font-size: clamp(4rem, 16vw, 6rem); font-weight: 600; line-height: 1.2; letter-spacing: -.05em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; margin: .5rem 0 1.5rem; }
+.actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+.feedback { margin-top: 1rem; }
+.details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: 1rem; margin-top: 1rem; }
+.saved-value { display: block; font-size: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.clock { display: block; font-size: .875rem; font-variant-numeric: tabular-nums; }
 ",
 );
 
@@ -224,37 +237,105 @@ async fn index(state: AppState, (): ()) -> Result<Page<Counter>, DbError> {
         problem: String::new(),
     };
     Ok(Page::new("hypersig on Cloudflare Workers", initial)
+        .global(hypersig_ui::global())
+        .theme(hypersig_ui::theme())
         .style(STYLE)
         .child(
-            div()
+            main()
+                .class(Class::new("shell"))
                 .on_load(CLOCK.call().reconnect())
-                .child(h1().text("Counter"))
                 .child(
-                    p().child(button().on_click(count.set(count + 1)).text("+1"))
-                        .child(span().bind_text(count.to_text()))
+                    div()
+                        .class(Class::new("intro"))
+                        .child(p().class(Class::new("eyebrow")).text("hypersig playground"))
+                        .child(h1().text("Counter"))
                         .child(
-                            button()
-                                .on_click(DOUBLE.call_with(count))
-                                .text("Double on the worker"),
-                        )
-                        .child(
-                            button()
-                                .on_click(SAVE.call_with(count).error(problem))
-                                .text("Save in D1"),
+                            p().class(Class::new("muted"))
+                                .text("Change a number. Save it. See it across every tab."),
                         ),
                 )
                 .child(
-                    p().attr("role", "alert")
-                        .show(!problem.is_empty())
-                        .bind_text(problem),
+                    card()
+                        .child(
+                            card_header()
+                                .child(card_title(Level::H2).text("Your counter"))
+                                .child(
+                                    card_description()
+                                        .text("Add instantly, or double the value on the server."),
+                                ),
+                        )
+                        .child(
+                            card_content()
+                                .child(
+                                    strong()
+                                        .class(Class::new("counter-value"))
+                                        .bind_text(count.to_text()),
+                                )
+                                .child(
+                                    div()
+                                        .class(Class::new("actions"))
+                                        .child(
+                                            button(ButtonVariant::Default, ButtonSize::Lg)
+                                                .on_click(count.set(count + 1))
+                                                .text("+1 · Add one"),
+                                        )
+                                        .child(
+                                            button(ButtonVariant::Secondary, ButtonSize::Lg)
+                                                .on_click(DOUBLE.call_with(count))
+                                                .text("×2 · Double"),
+                                        )
+                                        .child(
+                                            button(ButtonVariant::Outline, ButtonSize::Lg)
+                                                .on_click(SAVE.call_with(count).error(problem))
+                                                .text("Save value"),
+                                        ),
+                                )
+                                .child(
+                                    alert(AlertVariant::Destructive)
+                                        .class(Class::new("feedback"))
+                                        .show(!problem.is_empty())
+                                        .child(alert_title().text("Could not save"))
+                                        .child(alert_description().bind_text(problem)),
+                                ),
+                        ),
+                )
+                .child(counter_details()),
+        ))
+}
+
+fn counter_details() -> hypersig::html::El<Counter> {
+    div()
+        .class(Class::new("details"))
+        .child(
+            card()
+                .on_load(SAVES.call().reconnect())
+                .child(
+                    card_header()
+                        .child(card_title(Level::H2).text("Saved value"))
+                        .child(card_description().text("Shared across all open tabs.")),
                 )
                 .child(
-                    p().on_load(SAVES.call().reconnect())
-                        .text("Saved in D1: ")
-                        .child(strong().bind_text(Counter::saved().to_text())),
+                    card_content().child(
+                        strong()
+                            .class(Class::new("saved-value"))
+                            .bind_text(Counter::saved().to_text()),
+                    ),
+                ),
+        )
+        .child(
+            card()
+                .child(
+                    card_header()
+                        .child(card_title(Level::H2).text("Server clock"))
+                        .child(card_description().text("Live updates, every second.")),
                 )
-                .child(p().bind_text(Counter::now().format_date(&TIME))),
-        ))
+                .child(
+                    card_content().child(
+                        p().class(Class::new("clock"))
+                            .bind_text(Counter::now().format_date(&TIME)),
+                    ),
+                ),
+        )
 }
 
 async fn double(_: AppState, count: i32) -> Patches<Counter> {

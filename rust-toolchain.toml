@@ -1,3 +1,4 @@
 # rustup adds the target to the default toolchain on the first build.
 [toolchain]
+channel = "stable"
 targets = ["wasm32-unknown-unknown"]

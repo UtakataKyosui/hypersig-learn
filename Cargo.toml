@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 axum = { version = "0.8", default-features = false }
 futures = "0.3"
 hypersig = "0.4.1"
+hypersig_ui = "0.4.1"
 serde = { version = "1", features = ["derive"] }
 tower-service = "0.3"
 # `#[durable_object]` expands to wasm-bindgen's macros, whose expansion names

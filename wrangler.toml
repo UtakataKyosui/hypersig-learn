@@ -5,7 +5,7 @@ compatibility_date = "2026-10-01"
 # worker-build compiles the crate to wasm and writes the JavaScript shim that
 # `main` names. `cargo install` does nothing once it is installed.
 [build]
-command = "cargo install --quiet --locked worker-build@0.8.7 && worker-build --release"
+command = "sh scripts/build.sh"
 
 # The database the counter is saved in, which the worker reads as `DB`.
 # `wrangler dev` keeps it in a local SQLite file under `.wrangler/`. The entry
