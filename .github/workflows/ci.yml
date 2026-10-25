@@ -8,11 +8,36 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    # Check dependency updates after merging; skip all jobs on their PRs.
+    if: github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.paths.outputs.rust }}
+      deploy: ${{ steps.paths.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: paths
+        name: Detect changed files
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: bash scripts/ci-changes.sh
+
   check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,11 +45,15 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-check
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
 
   wasm:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,66 +61,17 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --target wasm32-unknown-unknown
+        with:
+          shared-key: wasm-check
+      - run: cargo check --locked --target wasm32-unknown-unknown
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, wasm]
-    runs-on: ubuntu-latest
-    concurrency:
-      group: deploy
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - name: Set the D1 database id
-        env:
-          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
-        run: |
-          case "$D1_DATABASE_ID" in
-            ????????-????-????-????-????????????) ;;
-            *) echo "GitHub secret D1_DATABASE_ID is missing or malformed: run scripts/setup-d1.sh" >&2; exit 1 ;;
-          esac
-          awk -v id="$D1_DATABASE_ID" '{ print } /^database_name = / { print "database_id = \"" id "\"" }' wrangler.toml > wrangler.toml.tmp
-          mv wrangler.toml.tmp wrangler.toml
-          sed -n '/^\[\[d1_databases\]\]/,/^$/p' wrangler.toml
-      - name: Require the VAPID settings
-        env:
-          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
-          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
-          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
-        run: |
-          for name in VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT; do
-            if [ -z "$(printenv "$name")" ]; then
-              echo "GitHub secret $name is missing: run scripts/setup-vapid.sh" >&2
-              exit 1
-            fi
-          done
-      - id: deploy
-        uses: cloudflare/wrangler-action@v3
-        env:
-          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
-          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
-          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
-        with:
-          # The action's default Wrangler 3 cannot read `[exports.Hub]`.
-          wranglerVersion: "4.152.0"
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          vars: |
-            VAPID_PUBLIC_KEY
-          secrets: |
-            VAPID_PRIVATE_KEY
-            VAPID_SUBJECT
-      - name: Smoke test
-        env:
-          URL: ${{ steps.deploy.outputs.deployment-url }}
-        run: |
-          if [ -z "$URL" ]; then
-            echo "wrangler-action returned no deployment-url" >&2
-            exit 1
-          fi
-          curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors "$URL/manifest.webmanifest" > /dev/null
+    needs: [changes, check, wasm]
+    if: >-
+      always() && !cancelled() &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.result == 'success' && needs.changes.outputs.deploy == 'true' &&
+      (needs.check.result == 'success' || needs.check.result == 'skipped') &&
+      (needs.wasm.result == 'success' || needs.wasm.result == 'skipped')
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit

@@ -1,0 +1,79 @@
+name: Deploy
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: worker-release
+          cache-all-crates: true
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-wrangler-4.152.0
+      - name: Set the D1 database id
+        env:
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+        run: |
+          case "$D1_DATABASE_ID" in
+            ????????-????-????-????-????????????) ;;
+            *) echo "GitHub secret D1_DATABASE_ID is missing or malformed: run scripts/setup-d1.sh" >&2; exit 1 ;;
+          esac
+          awk -v id="$D1_DATABASE_ID" '{ print } /^database_name = / { print "database_id = \"" id "\"" }' wrangler.toml > wrangler.toml.tmp
+          mv wrangler.toml.tmp wrangler.toml
+          sed -n '/^\[\[d1_databases\]\]/,/^$/p' wrangler.toml
+      - name: Require the VAPID settings
+        env:
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+        run: |
+          for name in VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT; do
+            if [ -z "$(printenv "$name")" ]; then
+              echo "GitHub secret $name is missing: run scripts/setup-vapid.sh" >&2
+              exit 1
+            fi
+          done
+      - id: deploy
+        uses: cloudflare/wrangler-action@v3
+        env:
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+        with:
+          # The action's default Wrangler 3 cannot read `[exports.Hub]`.
+          wranglerVersion: "4.152.0"
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          vars: |
+            VAPID_PUBLIC_KEY
+          secrets: |
+            VAPID_PRIVATE_KEY
+            VAPID_SUBJECT
+      - name: Smoke test
+        env:
+          URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "wrangler-action returned no deployment-url" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors "$URL/manifest.webmanifest" > /dev/null
