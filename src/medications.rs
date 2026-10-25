@@ -104,6 +104,10 @@ pub struct TodayDose {
     pub medication_id: String,
     pub name: String,
     pub summary: String,
+    /// `HH:mm`.
+    pub time: String,
+    /// The amount and the timing of the slot.
+    pub detail: String,
 }
 #[derive(Signals, Serialize, Deserialize)]
 pub struct Settings {
@@ -115,6 +119,13 @@ pub struct Settings {
     pub today_label: String,
     /// The next notification of all medications.
     pub next: String,
+    /// The next notification in parts, all `""` while there is none: the
+    /// time of day, the day (`今日` or `10月26日`), the medication, and the
+    /// amount and timing.
+    pub next_time: String,
+    pub next_day: String,
+    pub next_name: String,
+    pub next_detail: String,
     pub problem: String,
     /// The HTTP status of a failed call, `0` while none failed.
     pub status: i32,

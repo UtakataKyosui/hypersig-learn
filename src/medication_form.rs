@@ -221,6 +221,19 @@ impl SlotView {
     }
 }
 
+impl SlotView {
+    /// The amount and the timing: `1 錠 · 食後`.
+    #[must_use]
+    pub fn detail(&self) -> String {
+        format!(
+            "{} {} · {}",
+            self.input.amount,
+            self.input.unit.trim(),
+            timing_label(&self.input.timing)
+        )
+    }
+}
+
 impl From<crate::medications::Slot> for SlotView {
     fn from(slot: crate::medications::Slot) -> Self {
         Self::new(slot.id, slot.input)

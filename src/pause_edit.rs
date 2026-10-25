@@ -259,6 +259,7 @@ pub fn standing_banner() -> El<EditPage> {
 pub fn pauses_card() -> El<EditPage> {
     let saved = EditPage::target().at(Target::revision()).ge(1);
     card()
+        .class(Class::new("med-card"))
         .child(
             card_header()
                 .child(card_title(Level::H2).text("休薬期間"))

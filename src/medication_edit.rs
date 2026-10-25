@@ -11,7 +11,7 @@ use crate::{
     domain::UtcInstant,
     medication_form::{MedicationForm, REPEATS, SlotView, TIMINGS, UNITS, blank_slot},
     medication_input::{DoseSlotInput, MedicationInput, PauseInput},
-    medication_style::STYLE,
+    medication_style::{STYLE, Tab, head, tab_bar, theme},
     medications::{self, Editor, Error, Slot},
     pause_edit::{self, PauseView},
 };
@@ -145,6 +145,7 @@ pub fn render(editor: &Editor) -> Page<EditPage> {
     Page::new("薬の設定", state)
         .global(hypersig_ui::global())
         .theme(hypersig_ui::theme())
+        .theme(theme())
         .style(STYLE)
         .child(view())
 }
@@ -164,15 +165,18 @@ const REMOVE_SLOT_DIALOG: Dialog<EditPage> = Dialog::new("remove-slot");
 fn view() -> El<EditPage> {
     main()
         .class(Class::new("med-shell"))
+        .child(head(
+            h1().bind_text(if_else(
+                EditPage::target().at(Target::revision()).ge(1),
+                "お薬を編集",
+                "お薬を登録",
+            )),
+            p().text("あなたのペースで、忘れずに。"),
+        ))
         .child(
-            div()
-                .class(Class::new("med-bar"))
-                .child(h1().bind_text(if_else(
-                    EditPage::target().at(Target::revision()).ge(1),
-                    "薬の編集",
-                    "薬の登録",
-                )))
-                .child(a().href(crate::MEDICATIONS.link()).text("一覧へ戻る")),
+            a().href(crate::MEDICATIONS.link())
+                .class(Class::new("med-link"))
+                .text("← 今日の予定へ戻る"),
         )
         .child(crate::failure::alerts(
             EditPage::problem(),
@@ -182,7 +186,12 @@ fn view() -> El<EditPage> {
         .child(medication_card())
         .child(slots_card())
         .child(pause_edit::pauses_card())
-        .child(crate::auth::sign_out_button())
+        .child(
+            div()
+                .class(Class::new("med-actions"))
+                .child(crate::auth::sign_out_button()),
+        )
+        .child(tab_bar(Tab::Medications))
 }
 
 fn medication_card() -> El<EditPage> {
@@ -197,9 +206,10 @@ fn medication_card() -> El<EditPage> {
     let required =
         |kind, caption, field| crate::form_fields::temporal_field(kind, caption, form, field, true);
     card()
+        .class(Class::new("med-card"))
         .child(
             card_header()
-                .child(card_title(Level::H2).text("薬と繰り返し"))
+                .child(card_title(Level::H2).text("お薬と繰り返し"))
                 .child(card_description().text("開始日から、設定した繰り返しで服薬します。")),
         )
         .child(
@@ -213,26 +223,19 @@ fn medication_card() -> El<EditPage> {
                             .child(alert_description().text("赤字の項目を直すと保存できます。")),
                     )
                     .child(
-                        TextField::in_form("薬名", form, MedicationForm::name())
+                        TextField::in_form("お薬の名前", form, MedicationForm::name())
                             .required()
                             .render(),
                     )
-                    .child(required(
-                        crate::form_fields::Temporal::Date,
-                        "開始日",
-                        MedicationForm::start(),
-                    ))
-                    .child(crate::form_fields::date_field(
-                        "終了日（任意）",
-                        form,
-                        MedicationForm::end(),
-                    ))
-                    .child(radio_group_in_form(
-                        "繰り返し",
-                        form,
-                        MedicationForm::repeat(),
-                        REPEATS.map(|(value, label)| (value.to_owned(), label)),
-                    ))
+                    .child(
+                        radio_group_in_form(
+                            "繰り返し",
+                            form,
+                            MedicationForm::repeat(),
+                            REPEATS.map(|(value, label)| (value.to_owned(), label)),
+                        )
+                        .class(Class::new("med-seg")),
+                    )
                     .child(
                         div().show(repeat.equals("interval")).child(
                             NumberField::in_form(
@@ -246,6 +249,16 @@ fn medication_card() -> El<EditPage> {
                         ),
                     )
                     .child(weekdays().show(repeat.equals("weekdays")))
+                    .child(required(
+                        crate::form_fields::Temporal::Date,
+                        "開始日",
+                        MedicationForm::start(),
+                    ))
+                    .child(crate::form_fields::date_field(
+                        "終了日（任意）",
+                        form,
+                        MedicationForm::end(),
+                    ))
                     .child(switch_in_form(
                         "通知を有効にする",
                         form,
@@ -269,7 +282,7 @@ fn medication_card() -> El<EditPage> {
                     .child(
                         submit_button(ButtonVariant::Default, ButtonSize::Lg)
                             .disabled(busy)
-                            .bind_text(if_else(busy, "保存中…", "保存")),
+                            .bind_text(if_else(busy, "保存中…", "この内容で保存")),
                     ),
             ),
         )
@@ -297,6 +310,7 @@ fn weekdays() -> El<EditPage> {
 fn slots_card() -> El<EditPage> {
     let saved = EditPage::target().at(Target::revision()).ge(1);
     card()
+        .class(Class::new("med-card"))
         .child(
             card_header()
                 .child(card_title(Level::H2).text("服薬枠"))
@@ -385,24 +399,28 @@ fn slot_form() -> El<EditPage> {
         )
         .child(crate::form_fields::temporal_field(
             crate::form_fields::Temporal::Time,
-            "時刻",
+            "お薬の通知時刻",
             form,
             DoseSlotInput::time(),
             true,
         ))
         .child(
-            TextField::in_form("量", form, DoseSlotInput::amount())
-                .input_mode(hypersig_ui::InputMode::Decimal)
-                .description("0.01〜1000、小数2桁まで")
-                .required()
-                .render(),
+            div()
+                .class(Class::new("med-row2"))
+                .child(
+                    TextField::in_form("1回の量", form, DoseSlotInput::amount())
+                        .input_mode(hypersig_ui::InputMode::Decimal)
+                        .description("0.01〜1000、小数2桁まで")
+                        .required()
+                        .render(),
+                )
+                .child(select_field_in_form(
+                    "単位",
+                    form,
+                    DoseSlotInput::unit(),
+                    UNITS.map(|unit| (unit.to_owned(), unit)),
+                )),
         )
-        .child(select_field_in_form(
-            "単位",
-            form,
-            DoseSlotInput::unit(),
-            UNITS.map(|unit| (unit.to_owned(), unit)),
-        ))
         .child(select_field_in_form(
             "タイミング",
             form,

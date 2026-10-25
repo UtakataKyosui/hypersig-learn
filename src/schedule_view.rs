@@ -1,5 +1,5 @@
 //! Screen adapter: timestamps are Unix milliseconds; timezone is never Browser.
-use crate::domain::{InvalidValue, Medication, NextDose, Occurrence, UtcInstant};
+use crate::domain::{InvalidValue, LocalDate, Medication, NextDose, Occurrence, UtcInstant};
 use hypersig::{DateFormat, DateStyle, IntlLocale, TimeStyle, TimeZone, Timestamp};
 pub const TIMEZONE_LABEL: &str = "Asia/Tokyo";
 pub const DATE_TIME: DateFormat =
@@ -51,6 +51,29 @@ pub fn query(medication: &Medication, now: Timestamp) -> Result<ScheduleView, In
             .collect(),
         next: medication.next(now)?.into(),
     })
+}
+
+/// `date` as `10月25日（日）`.
+#[must_use]
+pub fn day_label(date: LocalDate, with_weekday: bool) -> String {
+    let text = date.to_string();
+    let number = |range: std::ops::Range<usize>| text[range].trim_start_matches('0').to_owned();
+    let weekday = ["月", "火", "水", "木", "金", "土", "日"][usize::from(date.weekday())];
+    let day = format!("{}月{}日", number(5..7), number(8..10));
+    if with_weekday {
+        format!("{day}（{weekday}）")
+    } else {
+        day
+    }
+}
+
+/// The time of day of `at` on the Asia/Tokyo clock as `HH:mm`, or `""` for a
+/// clock outside the supported calendar.
+#[must_use]
+pub fn tokyo_clock(at: Timestamp) -> String {
+    tokyo_text(at)
+        .split_once(' ')
+        .map_or_else(String::new, |(_, time)| time.to_owned())
 }
 
 /// `at` as `YYYY-MM-DD HH:mm` on the Asia/Tokyo calendar. The offset is added
