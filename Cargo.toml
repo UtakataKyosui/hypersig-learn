@@ -13,7 +13,7 @@ aes-gcm = "0.11"
 # builds for wasm32-unknown-unknown.
 async-trait = "0.1"
 axum = { version = "0.8", default-features = false }
-base64 = "0.22"
+base64 = "0.23"
 futures = "0.3"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 # tower-sessions' random session ids use getrandom 0.2, which needs `js`
