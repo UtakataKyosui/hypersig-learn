@@ -242,11 +242,11 @@ pub async fn register(
 
 pub async fn schedule(
     state: AppState,
-    _: crate::auth::Member,
+    member: crate::auth::Member,
     (): (),
 ) -> Result<Patches<NotificationSettings>, ProbeError> {
     let at = now_ms() + PROBE_DELAY_MS;
-    if !crate::repository::schedule_probe(&state.db, at)
+    if !crate::repository::schedule_probe(&state.db, member.owner(), at)
         .await
         .map_err(StoreError::from)?
     {
@@ -329,8 +329,11 @@ pub async fn run_scheduled(env: &Env) -> worker::Result<()> {
     let private_key = env.secret("VAPID_PRIVATE_KEY")?.to_string();
     let subject = env.secret("VAPID_SUBJECT")?.to_string();
     let now = now_ms();
-    let Some((subscription, probe_at)) =
-        crate::repository::claim_probe(&db, now, DEADLINE_MS).await?
+    let Some(crate::repository::Claimed {
+        owner,
+        subscription,
+        probe_at,
+    }) = crate::repository::claim_probe(&db, now, DEADLINE_MS).await?
     else {
         return Ok(());
     };
@@ -338,7 +341,7 @@ pub async fn run_scheduled(env: &Env) -> worker::Result<()> {
     let outcome = match sent {
         Ok(outcome) => outcome,
         Err(error) => {
-            crate::repository::restore_claim(&db, &subscription.endpoint, probe_at).await?;
+            crate::repository::restore_claim(&db, &owner, &subscription.endpoint, probe_at).await?;
             return Err(error);
         }
     };
@@ -348,7 +351,7 @@ pub async fn run_scheduled(env: &Env) -> worker::Result<()> {
             crate::repository::expire_subscription(&db, &subscription).await?;
         }
         Outcome::Retry => {
-            crate::repository::restore_claim(&db, &subscription.endpoint, probe_at).await?;
+            crate::repository::restore_claim(&db, &owner, &subscription.endpoint, probe_at).await?;
         }
         Outcome::Accepted | Outcome::Rejected(_) => {}
     }
@@ -427,5 +430,6 @@ mod tests {
         assert!(html.contains(assets::SUBSCRIBE_SCRIPT));
         assert!(html.contains("data-hs-on-custom"));
         assert!(html.contains("/notifications/subscription"));
+        assert!(!html.contains("利用者 ID"));
     }
 }

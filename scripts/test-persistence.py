@@ -8,7 +8,11 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-QUERIES = re.findall(r'"((?:SELECT|INSERT|UPDATE|DELETE)[^"\n]+)"', (ROOT / "src/repository.rs").read_text())
+QUERIES = [
+    query
+    for source in ["src/repository.rs", "src/auth_store.rs", "src/session_store.rs"]
+    for query in re.findall(r'"((?:SELECT|INSERT|UPDATE|DELETE)[^"\n]+)"', (ROOT / source).read_text())
+]
 
 
 def sql(prefix):
@@ -22,7 +26,8 @@ class Persistence(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.path = Path(self.directory.name) / "db.sqlite"
         self.db = self.connect()
-        self.db.executescript((ROOT / "migrations/0001_medication.sql").read_text())
+        for migration in sorted((ROOT / "migrations").glob("*.sql")):
+            self.db.executescript(migration.read_text())
         self.save(0)
 
     def connect(self):
@@ -110,7 +115,7 @@ class Persistence(unittest.TestCase):
         self.seed_job()
         endpoint = "https://fcm.googleapis.com/a"
         with self.db:
-            self.db.execute(sql("INSERT INTO push_probe"), (endpoint, "new-key", "new-auth"))
+            self.db.execute(sql("INSERT INTO push_probe"), (endpoint, "new-key", "new-auth", "owner"))
             self.db.execute(sql("INSERT INTO push_subscriptions"),
                             ("sub", "owner", endpoint, "new-key", "new-auth", 2000))
             # A late 410 response for old keys must not expire a replacement.
@@ -127,6 +132,199 @@ class Persistence(unittest.TestCase):
             self.assertEqual(other.execute("SELECT state FROM notification_deliveries").fetchone()[0], "cancelled")
         finally:
             other.close()
+
+
+class Accounts(unittest.TestCase):
+    """Migration 0002 and the SQL of src/auth_store.rs, on independent connections."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = Path(self.directory.name) / "db.sqlite"
+        self.db = self.connect()
+        self.db.executescript((ROOT / "migrations/0001_medication.sql").read_text())
+        with self.db:
+            self.db.execute("INSERT INTO medications VALUES('med','owner','薬',1,1,1000,1000,'{}')")
+            self.db.execute(sql("INSERT INTO push_subscriptions"), ("sub", "owner", "https://fcm.googleapis.com/a", "k", "a", 1000))
+            self.db.execute("INSERT INTO push_probe VALUES(1,'https://fcm.googleapis.com/a','k','a',5000)")
+        self.db.executescript((ROOT / "migrations/0002_auth.sql").read_text())
+        self.db.executescript((ROOT / "migrations/0003_owner_isolation.sql").read_text())
+
+    def connect(self):
+        db = sqlite3.connect(self.path)
+        db.execute("PRAGMA foreign_keys=ON")
+        return db
+
+    def tearDown(self):
+        self.db.close()
+        self.directory.cleanup()
+
+    def login(self, db, user_id, issuer="https://accounts.google.com", subject="sub-1", now=1000):
+        with db:
+            db.execute(sql("INSERT INTO users"), (user_id, now, issuer, subject))
+            db.execute(sql("INSERT OR IGNORE INTO external_identities"), (user_id, now, issuer, subject))
+            return db.execute(sql("SELECT u.id,u.status"), (issuer, subject)).fetchall()
+
+    def test_migration_keeps_existing_data_and_down_script_reverts(self):
+        self.assertEqual(self.db.execute("SELECT count(*) FROM medications").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM push_subscriptions").fetchone()[0], 1)
+        self.db.execute("CREATE TABLE d1_migrations(name TEXT)")
+        self.db.execute("INSERT INTO d1_migrations VALUES('0002_auth.sql'),('0003_owner_isolation.sql')")
+        self.db.executescript((ROOT / "migrations/rollback/0003_owner_isolation_down.sql").read_text())
+        self.assertEqual(self.db.execute("SELECT id,probe_at FROM push_probe").fetchall(), [(1, 5000)])
+        self.db.executescript((ROOT / "migrations/rollback/0002_auth_down.sql").read_text())
+        tables = {row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertFalse(tables & {"users", "external_identities", "sessions", "oauth_flows"})
+        self.assertEqual(self.db.execute("SELECT count(*) FROM medications").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM d1_migrations").fetchone()[0], 0)
+
+    def test_first_logins_create_one_user_visible_to_other_connections(self):
+        other = self.connect()
+        try:
+            first = self.login(self.db, "user-a")
+            second = self.login(other, "user-b")
+            self.assertEqual(first, [("user-a", "active", 1)])
+            self.assertEqual(second, [("user-a", "active", 1)])
+            self.assertEqual(self.db.execute("SELECT count(*) FROM users").fetchone()[0], 1)
+            third = self.login(other, "user-c", subject="sub-2")
+            self.assertEqual(third, [("user-c", "active", 1)])
+            self.assertEqual(other.execute("SELECT count(*) FROM external_identities").fetchone()[0], 2)
+        finally:
+            other.close()
+
+    def test_identity_is_keyed_by_issuer_and_subject_and_users_are_not_deleted_under_it(self):
+        self.login(self.db, "user-a")
+        self.assertEqual(self.login(self.db, "user-b", issuer="https://other.example")[0][0], "user-b")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("INSERT INTO external_identities VALUES('https://accounts.google.com','sub-1','user-b',1)")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("INSERT INTO external_identities VALUES('i','s','missing',1)")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("DELETE FROM users WHERE id='user-a'")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("INSERT INTO users VALUES('x','unknown',1,1)")
+
+    def test_flow_is_consumed_once_and_only_with_its_binding_before_expiry(self):
+        with self.db:
+            self.db.execute(sql("INSERT INTO oauth_flows"), ("state", "nonce", "verifier", "binding", 5000))
+        other = self.connect()
+        try:
+            consume = sql("DELETE FROM oauth_flows WHERE state")
+
+            def attempt(db, *args):
+                with db:
+                    return db.execute(consume, args).fetchall()
+
+            self.assertEqual(attempt(other, "state", "wrong", 1000), [])
+            self.assertEqual(attempt(other, "state", "binding", 5000), [])
+            self.assertEqual(attempt(other, "state", "binding", 4999), [("nonce", "verifier")])
+            self.assertEqual(attempt(self.db, "state", "binding", 1000), [])
+        finally:
+            other.close()
+
+    def test_purge_removes_only_expired_records(self):
+        with self.db:
+            self.db.execute("INSERT INTO sessions VALUES('old','{}',1000),('new','{}',9000)")
+            self.db.execute(sql("INSERT INTO oauth_flows"), ("s1", "n", "v", "b", 1000))
+            self.db.execute(sql("INSERT INTO oauth_flows"), ("s2", "n", "v", "b", 9000))
+            self.db.execute(sql("DELETE FROM sessions WHERE expires_at"), (1000,))
+            self.db.execute(sql("DELETE FROM oauth_flows WHERE expires_at"), (1000,))
+        self.assertEqual(self.db.execute("SELECT id FROM sessions").fetchall(), [("new",)])
+        self.assertEqual(self.db.execute("SELECT state FROM oauth_flows").fetchall(), [("s2",)])
+
+    def test_session_store_statements(self):
+        insert, upsert = sql("INSERT OR IGNORE INTO sessions"), sql("INSERT INTO sessions")
+        load, remove = sql("SELECT record FROM sessions"), sql("DELETE FROM sessions WHERE id")
+        other = self.connect()
+        try:
+            with self.db:
+                self.assertEqual(self.db.execute(insert, ("a", '{"v":1}', 5000)).rowcount, 1)
+            with other:
+                # An id collision inserts nothing, so the store retries with a new id.
+                self.assertEqual(other.execute(insert, ("a", '{"v":2}', 9000)).rowcount, 0)
+            self.assertEqual(self.db.execute(load, ("a", 4999)).fetchall(), [('{"v":1}',)])
+            self.assertEqual(other.execute(load, ("a", 5000)).fetchall(), [])
+            with other:
+                other.execute(upsert, ("a", '{"v":3}', 9000))
+            self.assertEqual(self.db.execute(load, ("a", 6000)).fetchall(), [('{"v":3}',)])
+            with other:
+                other.execute(remove, ("a",))
+            self.assertEqual(self.db.execute(load, ("a", 0)).fetchall(), [])
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.db.execute(upsert, ("b", "not json", 1))
+        finally:
+            other.close()
+
+    def test_existing_probe_becomes_the_legacy_owners_and_probes_are_per_owner(self):
+        self.assertEqual(self.db.execute("SELECT owner,probe_at FROM push_probe").fetchall(), [("owner", 5000)])
+        save, disable = sql("INSERT INTO push_probe"), sql("UPDATE push_probe SET probe_at=NULL WHERE endpoint")
+        schedule = sql("UPDATE push_probe SET probe_at=?1")
+        with self.db:
+            self.db.execute(save, ("https://fcm.googleapis.com/b", "kb", "ab", "user-b"))
+            self.db.execute(save, ("https://fcm.googleapis.com/c", "kc", "ac", "user-c"))
+            # Registering again replaces only that owner's probe.
+            self.db.execute(save, ("https://fcm.googleapis.com/c2", "kc2", "ac2", "user-c"))
+            self.db.execute(sql("INSERT INTO push_subscriptions"), ("sb", "user-b", "https://fcm.googleapis.com/b", "kb", "ab", 1000))
+            self.db.execute(schedule, (9000, "user-b"))
+        rows = dict((owner, (endpoint, at)) for owner, endpoint, at in self.db.execute("SELECT owner,endpoint,probe_at FROM push_probe"))
+        self.assertEqual(rows["user-b"], ("https://fcm.googleapis.com/b", 9000))
+        self.assertEqual(rows["user-c"], ("https://fcm.googleapis.com/c2", None))
+        self.assertEqual(rows["owner"][0], "https://fcm.googleapis.com/a")
+        # A user cannot schedule or disable another user's probe, nor schedule one without an enabled subscription.
+        with self.db:
+            self.assertEqual(self.db.execute(schedule, (9500, "user-c")).rowcount, 0)
+            self.assertEqual(self.db.execute(disable, ("https://fcm.googleapis.com/b", "user-c")).rowcount, 0)
+            self.assertEqual(self.db.execute(disable, ("https://fcm.googleapis.com/b", "user-b")).rowcount, 1)
+
+    def test_a_delivery_cannot_join_a_job_and_a_subscription_of_different_owners(self):
+        with self.db:
+            self.db.execute(sql("INSERT INTO push_subscriptions"), ("sub-b", "user-b", "https://fcm.googleapis.com/b", "k", "a", 1000))
+            self.db.execute("INSERT INTO schedules VALUES('med','med','2026-10-01',NULL,'daily',1,0,'Asia/Tokyo')")
+            self.db.execute("INSERT INTO dose_slots VALUES('slot','med','08:00',50,'錠','after_meal','')")
+            self.db.execute("INSERT INTO notification_jobs VALUES('job','med','slot',1000,1,'pending',901000)")
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "delivery owner mismatch"):
+            self.db.execute("INSERT INTO notification_deliveries(job_id,subscription_id,state) VALUES('job','sub-b','pending')")
+        with self.db:
+            self.db.execute("INSERT INTO notification_deliveries(job_id,subscription_id,state) VALUES('job','sub','pending')")
+
+    def legacy(self, name, user):
+        self.db.executescript((ROOT / "scripts/legacy-owner" / f"{name}.sql").read_text().replace("@USER@", user))
+
+    def owners(self, table):
+        return dict(self.db.execute(f"SELECT id,owner FROM {table}").fetchall())
+
+    def test_legacy_data_moves_only_to_an_active_named_user_and_rolls_back(self):
+        with self.db:
+            self.db.execute("INSERT INTO users VALUES('user-a','active',1,1),('gone','disabled',1,1)")
+            self.db.execute("INSERT INTO medications VALUES('med-a','user-a','自分の薬',1,1,1,1,'{}')")
+        # An unknown or disabled user receives nothing and nothing is recorded.
+        for user in ["nobody", "gone"]:
+            self.legacy("migrate", user)
+            self.assertEqual(self.owners("medications"), {"med": "owner", "med-a": "user-a"})
+            self.assertEqual(self.db.execute("SELECT count(*) FROM legacy_owner_migration").fetchone()[0], 0)
+        self.legacy("migrate", "user-a")
+        self.assertEqual(self.owners("medications"), {"med": "user-a", "med-a": "user-a"})
+        self.assertEqual(self.owners("push_subscriptions"), {"sub": "user-a"})
+        self.assertEqual(self.db.execute("SELECT table_name,row_id FROM legacy_owner_migration ORDER BY 1").fetchall(),
+                         [("medications", "med"), ("push_subscriptions", "sub")])
+        # Running it again moves nothing more, and the child rows still belong to the same medication.
+        self.legacy("migrate", "user-a")
+        self.assertEqual(self.db.execute("SELECT count(*) FROM legacy_owner_migration").fetchone()[0], 2)
+        # Rolling back returns only the migrated rows, not the user's own.
+        self.legacy("rollback", "user-a")
+        self.assertEqual(self.owners("medications"), {"med": "owner", "med-a": "user-a"})
+        self.assertEqual(self.owners("push_subscriptions"), {"sub": "owner"})
+        self.assertEqual(self.db.execute("SELECT count(*) FROM legacy_owner_migration").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM medications").fetchone()[0], 2)
+        counts = self.db.execute((ROOT / "scripts/legacy-owner/status.sql").read_text().replace("@USER@", "user-a")).fetchall()
+        self.assertIn(("medications", "owner", 1), counts)
+
+    def test_counters_are_per_owner(self):
+        counter = sql("INSERT INTO counters")
+        with self.db:
+            self.db.execute(counter, ("user-a", 3))
+            self.db.execute(counter, ("user-b", 5))
+            self.db.execute(counter, ("user-a", 4))
+        self.assertEqual(dict(self.db.execute("SELECT owner,count FROM counters").fetchall()), {"user-a": 4, "user-b": 5})
 
 
 if __name__ == "__main__":

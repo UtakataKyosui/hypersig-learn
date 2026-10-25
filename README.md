@@ -20,8 +20,8 @@ npx wrangler dev
 http://localhost:8787 で開く。D1 は `.wrangler/` の SQLite に保存される。Web Push を試すには、次の「セットアップ」の手順 2 で `.dev.vars` に VAPID の値を書く。
 
 初回起動前に `npx wrangler d1 migrations apply app --local` を実行する。
-`.dev.vars` に `AUTH_PASSWORD` とランダムな32バイト以上の `AUTH_SECRET` を設定し、`/login` からログインする。
-本番では同名の GitHub Secrets が必要。認証・保存契約と検証結果は [docs/persistence-auth.md](docs/persistence-auth.md) を参照。
+`.dev.vars` に `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REDIRECT_URL` を設定し、`/login` から Google でログインする。
+本番では同名の GitHub Secrets が必要。Google の設定、セッション、失効、検証結果は [docs/google-auth.md](docs/google-auth.md)、利用者ごとのデータ分離と既存データの引き継ぎは [docs/data-isolation.md](docs/data-isolation.md)、保存契約は [docs/persistence-auth.md](docs/persistence-auth.md) を参照。
 
 ## セットアップ（初回のみ）
 
