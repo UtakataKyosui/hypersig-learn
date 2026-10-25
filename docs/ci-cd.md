@@ -10,6 +10,10 @@
 
 `deploy` は `concurrency: deploy` で直列化し、実行中のデプロイを中断しない。スモークテストが `/` でなく `/manifest.webmanifest` を見るのは、将来ページが未ログインをリダイレクトしても CI が壊れないようにするため。
 
+`deploy` は Wrangler の版を `wranglerVersion` で固定する。`cloudflare/wrangler-action@v3` の既定は Wrangler 3 で、`wrangler.toml` の `[exports.Hub]` を読めないため。Dependabot はこの値を更新しないので、上げるときは手で書き換える。
+
+手元で `npx wrangler deploy` を実行しない。`database_id` と `VAPID_PUBLIC_KEY` を持たない設定で、CI が設定した Worker を上書きしてしまう。
+
 `.github/dependabot.yml` が Cargo と GitHub Actions の依存を週次で更新する。
 
 ## 初回セットアップ
