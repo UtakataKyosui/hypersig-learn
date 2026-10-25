@@ -38,7 +38,7 @@ Push サービス → SW(push) → showNotification → クリックで /notific
 | Web Push 暗号化・VAPID・送信 | `src/push.rs` |
 | 設定画面・購読保存 Action・scheduled 処理 | `src/notifications.rs` |
 | Service Worker／購読 custom element／アイコン | `assets/` |
-| Cron・VAPID 設定 | `wrangler.toml` |
+| Cron・VAPID 設定 | GitHub Secrets（公開鍵・秘密鍵・連絡先）、`scripts/setup-vapid.sh` |
 
 ### 0.4.1 固有の不足と回避
 
@@ -115,10 +115,8 @@ Push サービス → SW(push) → showNotification → クリックで /notific
 
 ### 準備
 
-1. VAPID 鍵対を作る。例：`node -e 'const c=require("crypto");const k=c.generateKeyPairSync("ec",{namedCurve:"prime256v1"}).privateKey.export({format:"jwk"});console.log("private",k.d);console.log("public",Buffer.concat([Buffer.from([4]),Buffer.from(k.x,"base64url"),Buffer.from(k.y,"base64url")]).toString("base64url"))'`
-2. `wrangler.toml` の `VAPID_PUBLIC_KEY` に公開鍵、`VAPID_SUBJECT` に連絡先を設定する。
-3. `npx wrangler secret put VAPID_PRIVATE_KEY` で秘密鍵を登録する。秘密鍵をチャット・Issue・コミットに貼らない。
-4. `npx wrangler deploy`（`workers.dev` の HTTPS）。
+1. `scripts/setup-vapid.sh` で VAPID 鍵対と連絡先を設定する。公開鍵・秘密鍵・連絡先は GitHub Secrets に入り、デプロイで Worker に渡る（詳細は `docs/ci-cd.md`）。秘密鍵をチャット・Issue・コミットに貼らない。
+2. main に merge し、CI の `deploy` ジョブでデプロイする（`workers.dev` の HTTPS）。手元の `npx wrangler deploy` は `database_id` と `VAPID_PUBLIC_KEY` を渡さず、CI が設定した値を上書きして Worker を壊すため使わない。
 
 ### 手順
 

@@ -332,7 +332,7 @@ impl IntoResponse for ProbeError {
 pub async fn run_scheduled(env: &Env) -> worker::Result<()> {
     let db = env.d1("DB")?;
     let private_key = env.secret("VAPID_PRIVATE_KEY")?.to_string();
-    let subject = env.var("VAPID_SUBJECT")?.to_string();
+    let subject = env.secret("VAPID_SUBJECT")?.to_string();
     let now = now_ms();
     db.exec(SCHEMA).await?;
     #[expect(

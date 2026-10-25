@@ -9,8 +9,8 @@ command = "sh scripts/build.sh"
 
 # The database the counter is saved in, which the worker reads as `DB`.
 # `wrangler dev` keeps it in a local SQLite file under `.wrangler/`. The entry
-# names no `database_id`, so the first `wrangler deploy` creates the database
-# on the account and writes its id here.
+# names no `database_id`: the deploy workflow writes the id from the GitHub
+# secret `D1_DATABASE_ID`, which `scripts/setup-d1.sh` stores.
 [[d1_databases]]
 binding = "DB"
 database_name = "app"
@@ -26,12 +26,9 @@ class_name = "Hub"
 type = "durable-object"
 storage = "sqlite"
 
-# The VAPID public key is not secret. Set the private key with
-# `npx wrangler secret put VAPID_PRIVATE_KEY`, and never write it here.
-# `VAPID_SUBJECT` is a `mailto:` or `https:` contact for the push services.
-[vars]
-VAPID_PUBLIC_KEY = ""
-VAPID_SUBJECT = "mailto:admin@example.com"
+# The VAPID public key, private key, and contact address are GitHub secrets
+# that the deploy workflow binds to the worker. `scripts/setup-vapid.sh`
+# creates them, and `.dev.vars` holds them for `wrangler dev`.
 
 # Every minute, UTC.
 [triggers]
