@@ -50,6 +50,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      - run: python3 scripts/test-persistence.py
 
   wasm:
     needs: changes
@@ -65,13 +66,56 @@ jobs:
           shared-key: wasm-check
       - run: cargo check --locked --target wasm32-unknown-unknown
 
+  worker:
+    # Runs the Worker in workerd with a disposable local D1 and two seeded
+    # users (scripts/auth_fixture.py). No Google account or secret is used.
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # The `runner` context is not available in a job-level `env`.
+      - run: echo "PERSIST_DIR=$RUNNER_TEMP/e2e" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: worker-e2e
+          cache-all-crates: true
+      - name: Cache npm downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-wrangler-4.152.0
+      - name: Apply migrations to the local database
+        run: npx --yes wrangler@4.152.0 d1 migrations apply app --local --persist-to "$PERSIST_DIR"
+      - name: Start the Worker
+        run: |
+          npx --yes wrangler@4.152.0 dev --port 8791 --persist-to "$PERSIST_DIR" \
+            --var GOOGLE_CLIENT_ID:ci-client.apps.example \
+            --var GOOGLE_CLIENT_SECRET:ci-client-secret \
+            --var GOOGLE_REDIRECT_URL:http://localhost:8791/auth/google/callback \
+            > "$RUNNER_TEMP/wrangler.log" 2>&1 &
+          for _ in $(seq 1 120); do
+            if curl --silent --fail http://localhost:8791/manifest.webmanifest > /dev/null; then exit 0; fi
+            sleep 5
+          done
+          echo "the Worker did not start" >&2
+          exit 1
+      - run: python3 scripts/test-worker.py
+      - name: Show the Wrangler log
+        if: failure()
+        run: cat "$RUNNER_TEMP/wrangler.log"
+
   deploy:
-    needs: [changes, check, wasm]
+    needs: [changes, check, wasm, worker]
     if: >-
       always() && !cancelled() &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.result == 'success' && needs.changes.outputs.deploy == 'true' &&
       (needs.check.result == 'success' || needs.check.result == 'skipped') &&
-      (needs.wasm.result == 'success' || needs.wasm.result == 'skipped')
+      (needs.wasm.result == 'success' || needs.wasm.result == 'skipped') &&
+      (needs.worker.result == 'success' || needs.worker.result == 'skipped')
     uses: ./.github/workflows/deploy.yml
     secrets: inherit

@@ -193,6 +193,7 @@ pub async fn send(
     headers.set("Urgency", "high")?;
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
+        .with_redirect(worker::RequestRedirect::Manual)
         .with_headers(headers)
         .with_body(Some(js_sys_body(&body)));
     let request = Request::new_with_init(&subscription.endpoint, &init)?;

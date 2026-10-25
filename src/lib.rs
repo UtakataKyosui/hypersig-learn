@@ -12,11 +12,18 @@
 //! reaches the tabs of the others through the `Hub` Durable Object.
 
 mod assets;
+mod auth;
+mod auth_store;
 pub mod domain;
 pub mod medication_input;
+mod medications;
 mod notifications;
+mod oidc;
 mod push;
+mod repository;
 pub mod schedule_view;
+mod session_state;
+mod session_store;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -39,6 +46,7 @@ use hypersig_ui::{
 };
 use serde::{Deserialize, Serialize};
 use tower_service::Service as _;
+use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 use worker::send::{SendFuture, SendWrapper};
 use worker::{
     ByteStream, Context, D1Database, Delay, DurableObject, Env, HttpRequest, State, Stub,
@@ -57,6 +65,7 @@ hypersig::routes! {
     fn pages(Router<AppState>);
     const INDEX: Route = "/" => index;
     const NOTIFICATIONS: Route = "/notifications" => notifications::settings_page;
+    const MEDICATIONS: Route = "/medications" => medications::page;
 }
 
 const DOUBLE: Action<Counter, i32> = Action::post("/double");
@@ -88,6 +97,7 @@ h1 { font-size: clamp(2rem, 6vw, 3rem); font-weight: 700; letter-spacing: -.04em
 /// so the wrapper never moves it to another.
 #[derive(Clone)]
 struct AppState {
+    oidc: oidc::Config,
     db: SendWrapper<Rc<D1Database>>,
     hub: Arc<Stub>,
     /// The VAPID public key the browser subscribes with.
@@ -142,58 +152,29 @@ impl DurableObject for Hub {
 /// either.
 type Feed = SendWrapper<ByteStream>;
 
-/// Runs before each query. `IF NOT EXISTS` leaves the table in place once the
-/// first request has made it, so a new database needs no migration first.
-const SCHEMA: &str =
-    "CREATE TABLE IF NOT EXISTS counter (id INTEGER PRIMARY KEY, count INTEGER NOT NULL)";
-
-/// A D1 call that failed. The visitor reads the body, and the worker's log
-/// keeps D1's own message.
-struct DbError(worker::Error);
+/// A D1 failure with a public message and a value-free log classification.
+struct DbError;
 
 impl From<worker::Error> for DbError {
-    fn from(error: worker::Error) -> Self {
-        Self(error)
+    fn from(_: worker::Error) -> Self {
+        Self
     }
 }
 
 impl IntoResponse for DbError {
     fn into_response(self) -> Response {
-        console_error!("D1: {}", self.0);
+        console_error!("D1: storage failure");
         let message = "The count could not be read or saved. Try again.";
         (StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
     }
 }
 
 impl AppState {
-    async fn saved(&self) -> Result<i32, DbError> {
-        let db = Rc::clone(&self.db);
-        // D1 answers through a JavaScript promise, which is not `Send` either.
-        SendFuture::new(async move {
-            db.exec(SCHEMA).await?;
-            let count = db
-                .prepare("SELECT count FROM counter WHERE id = 1")
-                .first::<i32>(Some("count"))
-                .await?;
-            Ok::<_, DbError>(count.unwrap_or(0))
-        })
-        .await
+    async fn saved(&self, member: &auth::Member) -> Result<i32, DbError> {
+        Ok(repository::counter_saved(&self.db, member.owner()).await?)
     }
-
-    async fn save(&self, count: i32) -> Result<(), DbError> {
-        let db = Rc::clone(&self.db);
-        SendFuture::new(async move {
-            db.exec(SCHEMA).await?;
-            db.prepare(
-                "INSERT INTO counter (id, count) VALUES (1, ?1) \
-                 ON CONFLICT (id) DO UPDATE SET count = excluded.count",
-            )
-            .bind(&[count.into()])?
-            .run()
-            .await?;
-            Ok::<_, DbError>(())
-        })
-        .await
+    async fn save(&self, member: &auth::Member, count: i32) -> Result<(), DbError> {
+        Ok(repository::counter_save(&self.db, member.owner(), count).await?)
     }
 
     /// Tells the hub that a count was saved. A failure is logged and the save
@@ -236,10 +217,10 @@ impl AppState {
     }
 }
 
-async fn index(state: AppState, (): ()) -> Result<Page<Counter>, DbError> {
+async fn index(state: AppState, member: auth::Member, (): ()) -> Result<Page<Counter>, DbError> {
     let count = Counter::count();
     let problem = Counter::problem();
-    let saved = state.saved().await?;
+    let saved = state.saved(&member).await?;
     let initial = Counter {
         count: saved,
         saved,
@@ -314,7 +295,8 @@ async fn index(state: AppState, (): ()) -> Result<Page<Counter>, DbError> {
                     hypersig::html::a()
                         .href(NOTIFICATIONS.link())
                         .text("通知設定"),
-                ),
+                )
+                .child(auth::sign_out_button()),
         ))
 }
 
@@ -353,35 +335,38 @@ fn counter_details() -> hypersig::html::El<Counter> {
         )
 }
 
-async fn double(_: AppState, count: i32) -> Patches<Counter> {
+async fn double(_: AppState, _: auth::Member, count: i32) -> Patches<Counter> {
     Counter::count().patch(count.saturating_mul(2)).into()
 }
 
-async fn save(state: AppState, count: i32) -> Result<Patches<Counter>, DbError> {
-    state.save(count).await?;
+async fn save(
+    state: AppState,
+    member: auth::Member,
+    count: i32,
+) -> Result<Patches<Counter>, DbError> {
+    state.save(&member, count).await?;
     state.publish().await;
     Ok(Counter::problem().patch(String::new()).into())
 }
 
 /// The saved count, once, then again after each save through any isolate.
 /// A failed read is logged and skipped, so the tab keeps the count it shows.
-fn saves(state: AppState, (): ()) -> impl Stream<Item = Patches<Counter>> {
-    stream::unfold((state, None), |(state, feed)| async move {
+fn saves(state: AppState, member: auth::Member, (): ()) -> impl Stream<Item = Patches<Counter>> {
+    stream::unfold((state, member, None), |(state, member, feed)| async move {
         let feed = state.next_save(feed).await;
-        let patch = match state.saved().await {
-            Ok(saved) => Some(Counter::saved().patch(saved).into()),
-            Err(error) => {
-                console_error!("D1: {}", error.0);
-                None
-            }
+        let patch = if let Ok(saved) = state.saved(&member).await {
+            Some(Counter::saved().patch(saved).into())
+        } else {
+            console_error!("D1: storage failure");
+            None
         };
-        Some((patch, (state, Some(feed))))
+        Some((patch, (state, member, Some(feed))))
     })
     .filter_map(future::ready)
 }
 
 /// The worker's time, once a second.
-fn clock(_: AppState, (): ()) -> impl Stream<Item = Patches<Counter>> {
+fn clock(_: AppState, _: auth::Member, (): ()) -> impl Stream<Item = Patches<Counter>> {
     stream::unfold((), |()| async {
         // `Delay` waits on a JavaScript timer, which is not `Send`. A worker
         // runs on one thread, so the wrapper never moves it to another.
@@ -390,26 +375,68 @@ fn clock(_: AppState, (): ()) -> impl Stream<Item = Patches<Counter>> {
     })
 }
 
+/// The name of the session cookie. It holds a random session id and nothing else.
+const SESSION_COOKIE: &str = "__Host-session";
+
+/// The Google OAuth client, from `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+/// and `GOOGLE_REDIRECT_URL`. Any missing or unacceptable value gives `None`.
+fn google_config(env: &Env) -> Option<oidc::Config> {
+    let var = |name: &str| env.var(name).ok().map(|value| value.to_string());
+    oidc::Config::new(
+        &var("GOOGLE_CLIENT_ID")?,
+        &env.secret("GOOGLE_CLIENT_SECRET").ok()?.to_string(),
+        &var("GOOGLE_REDIRECT_URL")?,
+    )
+    .ok()
+}
+
 #[event(fetch)]
 async fn fetch(
     request: HttpRequest,
     env: Env,
     _context: Context,
 ) -> worker::Result<axum::http::Response<axum::body::Body>> {
+    let Some(oidc) = google_config(&env) else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
     let state = AppState {
+        oidc,
         db: SendWrapper::new(Rc::new(env.d1("DB")?)),
         hub: Arc::new(env.durable_object("HUB")?.get_by_name(HUB)?),
-        vapid_public: env.var("VAPID_PUBLIC_KEY")?.to_string(),
+        vapid_public: env
+            .var("VAPID_PUBLIC_KEY")
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
     };
-    let mut app = assets::routes(pages(Router::new()))
+    let sessions = SessionManagerLayer::new(session_store::D1SessionStore::new(state.db.clone()))
+        .with_name(SESSION_COOKIE)
+        .with_secure(true)
+        .with_http_only(true)
+        .with_same_site(SameSite::Lax)
+        .with_path("/")
+        .with_expiry(Expiry::OnInactivity(time::Duration::minutes(15)));
+    let mut app = auth::router(assets::routes(pages(Router::new())))
         .layer(axum::middleware::map_response(assets::add_head_links))
         .hypersig_runtime()
         .action(notifications::REGISTER, notifications::register)
+        .action(notifications::UNREGISTER, notifications::unregister)
+        .action(
+            notifications::SUBSCRIPTION_STATUS,
+            notifications::subscription_status,
+        )
         .action(notifications::SCHEDULE_PROBE, notifications::schedule)
         .action(DOUBLE, double)
         .action(SAVE, save)
+        .action(medications::SAVE, medications::save)
+        .action(medications::DELETE, medications::delete)
+        .action(medications::LOAD, medications::load)
         .stream(CLOCK, clock)
         .stream(SAVES, saves)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::protect,
+        ))
+        .layer(sessions)
         .with_state(state);
     Ok(app.call(request).await?)
 }
@@ -417,7 +444,14 @@ async fn fetch(
 /// Runs every minute, from the cron trigger in `wrangler.toml`.
 #[event(scheduled)]
 async fn scheduled(_event: worker::ScheduledEvent, env: Env, _context: worker::ScheduleContext) {
-    if let Err(error) = notifications::run_scheduled(&env).await {
-        console_error!("scheduled: {error}");
+    if let Ok(db) = env.d1("DB")
+        && auth_store::purge_expired(&SendWrapper::new(Rc::new(db)), auth_store::now_ms())
+            .await
+            .is_err()
+    {
+        console_error!("scheduled: expired record cleanup failure");
+    }
+    if notifications::run_scheduled(&env).await.is_err() {
+        console_error!("scheduled: notification failure");
     }
 }
