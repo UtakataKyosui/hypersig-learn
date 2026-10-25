@@ -13,6 +13,7 @@
 
 mod assets;
 mod auth;
+mod auth_store;
 pub mod domain;
 pub mod medication_input;
 mod medications;

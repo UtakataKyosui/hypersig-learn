@@ -8,7 +8,11 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-QUERIES = re.findall(r'"((?:SELECT|INSERT|UPDATE|DELETE)[^"\n]+)"', (ROOT / "src/repository.rs").read_text())
+QUERIES = [
+    query
+    for source in ["src/repository.rs", "src/auth_store.rs"]
+    for query in re.findall(r'"((?:SELECT|INSERT|UPDATE|DELETE)[^"\n]+)"', (ROOT / source).read_text())
+]
 
 
 def sql(prefix):
@@ -127,6 +131,100 @@ class Persistence(unittest.TestCase):
             self.assertEqual(other.execute("SELECT state FROM notification_deliveries").fetchone()[0], "cancelled")
         finally:
             other.close()
+
+
+class Accounts(unittest.TestCase):
+    """Migration 0002 and the SQL of src/auth_store.rs, on independent connections."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = Path(self.directory.name) / "db.sqlite"
+        self.db = self.connect()
+        self.db.executescript((ROOT / "migrations/0001_medication.sql").read_text())
+        with self.db:
+            self.db.execute("INSERT INTO medications VALUES('med','owner','薬',1,1,1000,1000,'{}')")
+            self.db.execute(sql("INSERT INTO push_subscriptions"), ("sub", "owner", "https://fcm.googleapis.com/a", "k", "a", 1000))
+        self.db.executescript((ROOT / "migrations/0002_auth.sql").read_text())
+
+    def connect(self):
+        db = sqlite3.connect(self.path)
+        db.execute("PRAGMA foreign_keys=ON")
+        return db
+
+    def tearDown(self):
+        self.db.close()
+        self.directory.cleanup()
+
+    def login(self, db, user_id, issuer="https://accounts.google.com", subject="sub-1", now=1000):
+        with db:
+            db.execute(sql("INSERT INTO users"), (user_id, now, issuer, subject))
+            db.execute(sql("INSERT OR IGNORE INTO external_identities"), (user_id, now, issuer, subject))
+            return db.execute(sql("SELECT u.id,u.status"), (issuer, subject)).fetchall()
+
+    def test_migration_keeps_existing_data_and_down_script_reverts(self):
+        self.assertEqual(self.db.execute("SELECT count(*) FROM medications").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM push_subscriptions").fetchone()[0], 1)
+        self.db.execute("CREATE TABLE d1_migrations(name TEXT)")
+        self.db.execute("INSERT INTO d1_migrations VALUES('0002_auth.sql')")
+        self.db.executescript((ROOT / "migrations/rollback/0002_auth_down.sql").read_text())
+        tables = {row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertFalse(tables & {"users", "external_identities", "sessions", "oauth_flows"})
+        self.assertEqual(self.db.execute("SELECT count(*) FROM medications").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM d1_migrations").fetchone()[0], 0)
+
+    def test_first_logins_create_one_user_visible_to_other_connections(self):
+        other = self.connect()
+        try:
+            first = self.login(self.db, "user-a")
+            second = self.login(other, "user-b")
+            self.assertEqual(first, [("user-a", "active", 1)])
+            self.assertEqual(second, [("user-a", "active", 1)])
+            self.assertEqual(self.db.execute("SELECT count(*) FROM users").fetchone()[0], 1)
+            third = self.login(other, "user-c", subject="sub-2")
+            self.assertEqual(third, [("user-c", "active", 1)])
+            self.assertEqual(other.execute("SELECT count(*) FROM external_identities").fetchone()[0], 2)
+        finally:
+            other.close()
+
+    def test_identity_is_keyed_by_issuer_and_subject_and_users_are_not_deleted_under_it(self):
+        self.login(self.db, "user-a")
+        self.assertEqual(self.login(self.db, "user-b", issuer="https://other.example")[0][0], "user-b")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("INSERT INTO external_identities VALUES('https://accounts.google.com','sub-1','user-b',1)")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("INSERT INTO external_identities VALUES('i','s','missing',1)")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("DELETE FROM users WHERE id='user-a'")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("INSERT INTO users VALUES('x','unknown',1,1)")
+
+    def test_flow_is_consumed_once_and_only_with_its_binding_before_expiry(self):
+        with self.db:
+            self.db.execute(sql("INSERT INTO oauth_flows"), ("state", "nonce", "verifier", "binding", 5000))
+        other = self.connect()
+        try:
+            consume = sql("DELETE FROM oauth_flows WHERE state")
+
+            def attempt(db, *args):
+                with db:
+                    return db.execute(consume, args).fetchall()
+
+            self.assertEqual(attempt(other, "state", "wrong", 1000), [])
+            self.assertEqual(attempt(other, "state", "binding", 5000), [])
+            self.assertEqual(attempt(other, "state", "binding", 4999), [("nonce", "verifier")])
+            self.assertEqual(attempt(self.db, "state", "binding", 1000), [])
+        finally:
+            other.close()
+
+    def test_purge_removes_only_expired_records(self):
+        with self.db:
+            self.db.execute("INSERT INTO sessions VALUES('old','{}',1000),('new','{}',9000)")
+            self.db.execute(sql("INSERT INTO oauth_flows"), ("s1", "n", "v", "b", 1000))
+            self.db.execute(sql("INSERT INTO oauth_flows"), ("s2", "n", "v", "b", 9000))
+            self.db.execute(sql("DELETE FROM sessions WHERE expires_at"), (1000,))
+            self.db.execute(sql("DELETE FROM oauth_flows WHERE expires_at"), (1000,))
+        self.assertEqual(self.db.execute("SELECT id FROM sessions").fetchall(), [("new",)])
+        self.assertEqual(self.db.execute("SELECT state FROM oauth_flows").fetchall(), [("s2",)])
 
 
 if __name__ == "__main__":
