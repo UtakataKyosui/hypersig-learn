@@ -15,6 +15,7 @@ mod assets;
 mod auth;
 mod auth_store;
 pub mod domain;
+pub mod form_fields;
 pub mod medication_input;
 mod medications;
 mod notifications;

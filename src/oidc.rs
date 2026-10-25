@@ -298,7 +298,7 @@ mod tests {
         static KEYS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
         KEYS.get_or_init(|| {
             let pem = || {
-                rsa::RsaPrivateKey::new(&mut rand::rngs::OsRng, 1024)
+                rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 1024)
                     .unwrap()
                     .to_pkcs1_pem(LineEnding::LF)
                     .unwrap()
