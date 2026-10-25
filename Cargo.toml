@@ -19,7 +19,7 @@ hkdf = "0.12"
 hypersig = "0.4.1"
 hypersig_ui = "0.4.1"
 js-sys = "0.3.106"
-p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
+p256 = { version = "0.14", features = ["ecdh", "ecdsa"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
