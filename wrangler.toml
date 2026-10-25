@@ -25,3 +25,14 @@ class_name = "Hub"
 [exports.Hub]
 type = "durable-object"
 storage = "sqlite"
+
+# The VAPID public key is not secret. Set the private key with
+# `npx wrangler secret put VAPID_PRIVATE_KEY`, and never write it here.
+# `VAPID_SUBJECT` is a `mailto:` or `https:` contact for the push services.
+[vars]
+VAPID_PUBLIC_KEY = ""
+VAPID_SUBJECT = "mailto:admin@example.com"
+
+# Every minute, UTC.
+[triggers]
+crons = ["* * * * *"]

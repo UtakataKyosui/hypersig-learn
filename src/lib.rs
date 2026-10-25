@@ -11,6 +11,10 @@
 //! open tab shows the saved count, and a save made through one isolate
 //! reaches the tabs of the others through the `Hub` Durable Object.
 
+mod assets;
+mod notifications;
+mod push;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -49,6 +53,7 @@ struct Counter {
 hypersig::routes! {
     fn pages(Router<AppState>);
     const INDEX: Route = "/" => index;
+    const NOTIFICATIONS: Route = "/notifications" => notifications::settings_page;
 }
 
 const DOUBLE: Action<Counter, i32> = Action::post("/double");
@@ -82,6 +87,8 @@ h1 { font-size: clamp(2rem, 6vw, 3rem); font-weight: 700; letter-spacing: -.04em
 struct AppState {
     db: SendWrapper<Rc<D1Database>>,
     hub: Arc<Stub>,
+    /// The VAPID public key the browser subscribes with.
+    vapid_public: String,
 }
 
 /// The name of the one `Hub` every isolate talks to. A name names one
@@ -299,7 +306,12 @@ async fn index(state: AppState, (): ()) -> Result<Page<Counter>, DbError> {
                                 ),
                         ),
                 )
-                .child(counter_details()),
+                .child(counter_details())
+                .child(
+                    hypersig::html::a()
+                        .href(NOTIFICATIONS.link())
+                        .text("通知設定"),
+                ),
         ))
 }
 
@@ -384,13 +396,25 @@ async fn fetch(
     let state = AppState {
         db: SendWrapper::new(Rc::new(env.d1("DB")?)),
         hub: Arc::new(env.durable_object("HUB")?.get_by_name(HUB)?),
+        vapid_public: env.var("VAPID_PUBLIC_KEY")?.to_string(),
     };
-    let mut app = pages(Router::new())
+    let mut app = assets::routes(pages(Router::new()))
+        .layer(axum::middleware::map_response(assets::add_head_links))
         .hypersig_runtime()
+        .action(notifications::REGISTER, notifications::register)
+        .action(notifications::SCHEDULE_PROBE, notifications::schedule)
         .action(DOUBLE, double)
         .action(SAVE, save)
         .stream(CLOCK, clock)
         .stream(SAVES, saves)
         .with_state(state);
     Ok(app.call(request).await?)
+}
+
+/// Runs every minute, from the cron trigger in `wrangler.toml`.
+#[event(scheduled)]
+async fn scheduled(_event: worker::ScheduledEvent, env: Env, _context: worker::ScheduleContext) {
+    if let Err(error) = notifications::run_scheduled(&env).await {
+        console_error!("scheduled: {error}");
+    }
 }
