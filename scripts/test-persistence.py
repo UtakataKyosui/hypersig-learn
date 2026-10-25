@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 QUERIES = [
     query
-    for source in ["src/repository.rs", "src/auth_store.rs"]
+    for source in ["src/repository.rs", "src/auth_store.rs", "src/session_store.rs"]
     for query in re.findall(r'"((?:SELECT|INSERT|UPDATE|DELETE)[^"\n]+)"', (ROOT / source).read_text())
 ]
 
@@ -225,6 +225,29 @@ class Accounts(unittest.TestCase):
             self.db.execute(sql("DELETE FROM oauth_flows WHERE expires_at"), (1000,))
         self.assertEqual(self.db.execute("SELECT id FROM sessions").fetchall(), [("new",)])
         self.assertEqual(self.db.execute("SELECT state FROM oauth_flows").fetchall(), [("s2",)])
+
+    def test_session_store_statements(self):
+        insert, upsert = sql("INSERT OR IGNORE INTO sessions"), sql("INSERT INTO sessions")
+        load, remove = sql("SELECT record FROM sessions"), sql("DELETE FROM sessions WHERE id")
+        other = self.connect()
+        try:
+            with self.db:
+                self.assertEqual(self.db.execute(insert, ("a", '{"v":1}', 5000)).rowcount, 1)
+            with other:
+                # An id collision inserts nothing, so the store retries with a new id.
+                self.assertEqual(other.execute(insert, ("a", '{"v":2}', 9000)).rowcount, 0)
+            self.assertEqual(self.db.execute(load, ("a", 4999)).fetchall(), [('{"v":1}',)])
+            self.assertEqual(other.execute(load, ("a", 5000)).fetchall(), [])
+            with other:
+                other.execute(upsert, ("a", '{"v":3}', 9000))
+            self.assertEqual(self.db.execute(load, ("a", 6000)).fetchall(), [('{"v":3}',)])
+            with other:
+                other.execute(remove, ("a",))
+            self.assertEqual(self.db.execute(load, ("a", 0)).fetchall(), [])
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.db.execute(upsert, ("b", "not json", 1))
+        finally:
+            other.close()
 
 
 if __name__ == "__main__":

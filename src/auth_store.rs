@@ -148,3 +148,22 @@ pub async fn purge_expired(db: &Db, now: i64) -> worker::Result<()> {
     })
     .await
 }
+
+/// The current time in Unix milliseconds. The worker's `Date` is used on
+/// wasm, where `SystemTime` panics.
+pub fn now_ms() -> i64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        i64::try_from(worker::Date::now().as_millis()).unwrap_or(i64::MAX)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after Unix epoch")
+                .as_millis(),
+        )
+        .unwrap_or(i64::MAX)
+    }
+}

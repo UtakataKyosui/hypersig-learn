@@ -21,6 +21,8 @@ mod notifications;
 mod push;
 mod repository;
 pub mod schedule_view;
+mod session_state;
+mod session_store;
 
 use std::cell::RefCell;
 use std::rc::Rc;
