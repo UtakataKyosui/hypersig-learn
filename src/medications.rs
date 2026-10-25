@@ -9,7 +9,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use hypersig::{Action, Form, Page, Patches, Signals};
+use hypersig::{Action, Form, Patches, Signals};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Signals, Serialize, Deserialize)]
@@ -104,6 +104,7 @@ pub struct Delete {
 pub const SAVE: Action<Settings, Editor> = Action::post("/medications/save");
 pub const DELETE: Action<Settings, Delete> = Action::post("/medications/delete");
 pub const LOAD: Action<Settings, String> = Action::post("/medications/load");
+#[derive(Debug)]
 pub enum Error {
     Invalid,
     Missing,
@@ -150,26 +151,8 @@ fn saved(editor: Editor, now: i64) -> Result<Patches<Settings>, Error> {
         .signals(Settings::form().patch(Form::new(editor)))
         .list(Settings::items().patch_upsert(&[item], |i| i.at(Summary::id()))))
 }
-pub async fn save(
-    state: AppState,
-    member: Member,
-    mut editor: Editor,
-) -> Result<Patches<Settings>, Error> {
-    let now = hypersig::Timestamp::now().as_millis();
-    if editor.revision > 0 {
-        let row = crate::repository::load(&state.db, member.owner(), &editor.id).await?;
-        if row.revision != editor.revision {
-            return Err(Error::Conflict);
-        }
-    }
-    if editor.domain(now).is_err() {
-        return Ok(Settings::form()
-            .reject(&hypersig::FieldErrors::new().add(
-                Editor::medication(),
-                "入力値・重複する休薬期間を確認してください。",
-            ))
-            .into());
-    }
+/// Trims and normalizes the fields the repository stores as given.
+fn normalize(editor: &mut Editor) {
     editor.medication.name = editor.medication.name.trim().into();
     editor.medication.interval = editor.medication.interval.max(1);
     if editor.medication.repeat != "weekdays" {
@@ -178,9 +161,43 @@ pub async fn save(
     for slot in &mut editor.slots {
         slot.input.unit = slot.input.unit.trim().into();
     }
+}
+/// Writes `editor` and returns it with its revision advanced. The repository
+/// refuses a write whose revision is no longer the stored one.
+pub async fn commit(
+    state: &AppState,
+    member: &Member,
+    mut editor: Editor,
+    now: i64,
+) -> Result<Editor, Error> {
+    editor.domain(now)?;
+    normalize(&mut editor);
     crate::repository::save(&state.db, member.owner(), &editor, now).await?;
     editor.revision += 1;
-    saved(editor, now)
+    Ok(editor)
+}
+pub async fn save(
+    state: AppState,
+    member: Member,
+    editor: Editor,
+) -> Result<Patches<Settings>, Error> {
+    let now = hypersig::Timestamp::now().as_millis();
+    if editor.revision > 0 {
+        let row = crate::repository::load(&state.db, member.owner(), &editor.id).await?;
+        if row.revision != editor.revision {
+            return Err(Error::Conflict);
+        }
+    }
+    match commit(&state, &member, editor, now).await {
+        Ok(editor) => saved(editor, now),
+        Err(Error::Invalid) => Ok(Settings::form()
+            .reject(&hypersig::FieldErrors::new().add(
+                Editor::medication(),
+                "入力値・重複する休薬期間を確認してください。",
+            ))
+            .into()),
+        Err(error) => Err(error),
+    }
 }
 pub async fn delete(
     state: AppState,
@@ -195,42 +212,6 @@ pub async fn delete(
 pub async fn load(state: AppState, member: Member, id: String) -> Result<Patches<Settings>, Error> {
     let row = crate::repository::load(&state.db, member.owner(), &id).await?;
     Ok(Settings::form().patch(Form::new(row.editor()?)).into())
-}
-pub async fn page(state: AppState, member: Member, (): ()) -> Result<Page<Settings>, Error> {
-    let now = hypersig::Timestamp::now().as_millis();
-    let items = crate::repository::list(&state.db, member.owner())
-        .await?
-        .into_iter()
-        .map(|row| summary(&row.editor()?, row.updated_at, now))
-        .collect::<Result<Vec<_>, Error>>()?;
-    let editor = Editor {
-        id: random_id()?,
-        revision: 0,
-        enabled: true,
-        medication: MedicationInput {
-            name: String::new(),
-            start: UtcInstant(now)
-                .tokyo_date()
-                .map_err(|_| Error::Invalid)?
-                .to_string(),
-            end: String::new(),
-            repeat: "daily".into(),
-            interval: 1,
-            weekdays: 0,
-        },
-        slots: vec![],
-        pauses: vec![],
-    };
-    Ok(Page::new(
-        "服薬設定",
-        Settings {
-            form: Form::new(editor),
-            items,
-            problem: String::new(),
-        },
-    )
-    .child(hypersig::html::p().text("服薬設定 · Asia/Tokyo"))
-    .child(crate::auth::sign_out_button()))
 }
 pub fn random_id() -> Result<String, Error> {
     use base64::Engine as _;

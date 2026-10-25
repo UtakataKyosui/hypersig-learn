@@ -81,17 +81,22 @@ fn public(path: &str) -> bool {
     .contains(&path)
 }
 
+/// Whether `path` is one of the application's pages: the fixed routes and
+/// everything under the medications page, which has a page per medication.
+fn is_page(path: &str) -> bool {
+    [crate::INDEX.path(), crate::NOTIFICATIONS.path()].contains(&path)
+        || path == crate::MEDICATIONS.path()
+        || path
+            .strip_prefix(crate::MEDICATIONS.path())
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// A page navigation goes to the login page; everything else, including an
 /// action or stream the runtime fetches, is refused with 401.
 fn refusal(parts: &Parts) -> Response {
     if parts.method == axum::http::Method::GET
         && RequestKind::of(parts) == RequestKind::Navigation
-        && [
-            crate::INDEX.path(),
-            crate::MEDICATIONS.path(),
-            crate::NOTIFICATIONS.path(),
-        ]
-        .contains(&parts.uri.path())
+        && is_page(parts.uri.path())
     {
         Redirect::to(LOGIN.url(()).as_str()).into_response()
     } else {
@@ -147,7 +152,7 @@ pub fn sign_out_button<S>() -> hypersig::html::El<S> {
 }
 hypersig::routes! {
     fn routes(Router<AppState>);
-    const LOGIN: Route = "/login" => page;
+    pub(crate) const LOGIN: Route = "/login" => page;
     const START: Route = "/auth/google" => start;
 }
 
@@ -632,6 +637,33 @@ mod tests {
             send(&app, get_with(LOGIN.path(), None, true)).status(),
             StatusCode::OK
         );
+    }
+
+    #[test]
+    fn medication_pages_redirect_and_edit_actions_get_401_when_signed_out() {
+        let app = app(&Arc::new(Memory::default()), vec![]);
+        let target = crate::medication_edit::Target {
+            id: "med".into(),
+            revision: 1,
+        };
+        for page in [
+            crate::MEDICATION.url("med".into()),
+            crate::NEW_MEDICATION.url(()),
+        ] {
+            let response = send(&app, get_with(page.as_str(), None, true));
+            assert_eq!(response.status(), StatusCode::SEE_OTHER, "{page:?}");
+            assert_eq!(response.headers()[header::LOCATION], LOGIN.path());
+        }
+        let form = crate::medication_form::MedicationForm::blank("2026-10-05".into());
+        let slot = crate::medication_form::blank_slot();
+        let requests = [
+            crate::medication_edit::SAVE_MEDICATION.request(&(target.clone(), form)),
+            crate::medication_edit::SAVE_SLOT.request(&(target.clone(), String::new(), slot)),
+            crate::medication_edit::REMOVE_SLOT.request(&(target, "slot".into())),
+        ];
+        for request in requests {
+            assert_eq!(send(&app, request).status(), StatusCode::UNAUTHORIZED);
+        }
     }
 
     #[test]
