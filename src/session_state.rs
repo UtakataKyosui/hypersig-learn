@@ -1,7 +1,6 @@
 //! What the server keeps in a session. The browser holds only the session id;
 //! the user, the authentication level and the revocation version live in the
 //! store and change only through the functions below.
-#![expect(dead_code, reason = "wired up by the login routes")]
 use crate::auth_store::User;
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
@@ -48,6 +47,13 @@ pub async fn sign_in(
     session.cycle_id().await
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used once an additional factor such as a passkey exists"
+    )
+)]
 /// Raises the level on a new session id. The level is never a request value.
 pub async fn promote(session: &Session) -> Result<(), session::Error> {
     if let Some(mut identity) = current(session).await {
@@ -77,32 +83,9 @@ pub fn honoured(identity: &Identity, user: &User) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::HashMap, sync::Arc, sync::Mutex};
-    use tower_sessions::{
-        SessionStore,
-        session::{Id, Record},
-        session_store,
-    };
-
-    #[derive(Debug, Default)]
-    struct Memory(Mutex<HashMap<Id, Record>>);
-    #[async_trait::async_trait]
-    impl SessionStore for Memory {
-        async fn create(&self, record: &mut Record) -> session_store::Result<()> {
-            self.save(record).await
-        }
-        async fn save(&self, record: &Record) -> session_store::Result<()> {
-            self.0.lock().unwrap().insert(record.id, record.clone());
-            Ok(())
-        }
-        async fn load(&self, id: &Id) -> session_store::Result<Option<Record>> {
-            Ok(self.0.lock().unwrap().get(id).cloned())
-        }
-        async fn delete(&self, id: &Id) -> session_store::Result<()> {
-            self.0.lock().unwrap().remove(id);
-            Ok(())
-        }
-    }
+    use crate::session_store::testing::Memory;
+    use std::sync::Arc;
+    use tower_sessions::SessionStore as _;
 
     fn user(version: i64, status: &str) -> User {
         User {

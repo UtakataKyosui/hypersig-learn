@@ -46,6 +46,7 @@ use hypersig_ui::{
 };
 use serde::{Deserialize, Serialize};
 use tower_service::Service as _;
+use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 use worker::send::{SendFuture, SendWrapper};
 use worker::{
     ByteStream, Context, D1Database, Delay, DurableObject, Env, HttpRequest, State, Stub,
@@ -96,7 +97,7 @@ h1 { font-size: clamp(2rem, 6vw, 3rem); font-weight: 700; letter-spacing: -.04em
 /// so the wrapper never moves it to another.
 #[derive(Clone)]
 struct AppState {
-    auth: auth::Config,
+    oidc: oidc::Config,
     db: SendWrapper<Rc<D1Database>>,
     hub: Arc<Stub>,
     /// The VAPID public key the browser subscribes with.
@@ -369,17 +370,32 @@ fn clock(_: AppState, _: auth::Member, (): ()) -> impl Stream<Item = Patches<Cou
     })
 }
 
+/// The name of the session cookie. It holds a random session id and nothing else.
+const SESSION_COOKIE: &str = "__Host-session";
+
+/// The Google OAuth client, from `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+/// and `GOOGLE_REDIRECT_URL`. Any missing or unacceptable value gives `None`.
+fn google_config(env: &Env) -> Option<oidc::Config> {
+    let var = |name: &str| env.var(name).ok().map(|value| value.to_string());
+    oidc::Config::new(
+        &var("GOOGLE_CLIENT_ID")?,
+        &env.secret("GOOGLE_CLIENT_SECRET").ok()?.to_string(),
+        &var("GOOGLE_REDIRECT_URL")?,
+    )
+    .ok()
+}
+
 #[event(fetch)]
 async fn fetch(
     request: HttpRequest,
     env: Env,
     _context: Context,
 ) -> worker::Result<axum::http::Response<axum::body::Body>> {
+    let Some(oidc) = google_config(&env) else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
     let state = AppState {
-        auth: auth::Config {
-            secret: env.secret("AUTH_SECRET")?.to_string(),
-            password: env.secret("AUTH_PASSWORD")?.to_string(),
-        },
+        oidc,
         db: SendWrapper::new(Rc::new(env.d1("DB")?)),
         hub: Arc::new(env.durable_object("HUB")?.get_by_name(HUB)?),
         vapid_public: env
@@ -387,10 +403,13 @@ async fn fetch(
             .map(|v| v.to_string())
             .unwrap_or_default(),
     };
-    let auth = state.auth.clone();
-    if auth.secret.len() < 32 || auth.password.is_empty() {
-        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
-    }
+    let sessions = SessionManagerLayer::new(session_store::D1SessionStore::new(state.db.clone()))
+        .with_name(SESSION_COOKIE)
+        .with_secure(true)
+        .with_http_only(true)
+        .with_same_site(SameSite::Lax)
+        .with_path("/")
+        .with_expiry(Expiry::OnInactivity(time::Duration::minutes(15)));
     let mut app = auth::router(assets::routes(pages(Router::new())))
         .layer(axum::middleware::map_response(assets::add_head_links))
         .hypersig_runtime()
@@ -408,7 +427,11 @@ async fn fetch(
         .action(medications::LOAD, medications::load)
         .stream(CLOCK, clock)
         .stream(SAVES, saves)
-        .layer(axum::middleware::from_fn_with_state(auth, auth::protect))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::protect,
+        ))
+        .layer(sessions)
         .with_state(state);
     Ok(app.call(request).await?)
 }
@@ -416,6 +439,13 @@ async fn fetch(
 /// Runs every minute, from the cron trigger in `wrangler.toml`.
 #[event(scheduled)]
 async fn scheduled(_event: worker::ScheduledEvent, env: Env, _context: worker::ScheduleContext) {
+    if let Ok(db) = env.d1("DB")
+        && auth_store::purge_expired(&SendWrapper::new(Rc::new(db)), auth_store::now_ms())
+            .await
+            .is_err()
+    {
+        console_error!("scheduled: expired record cleanup failure");
+    }
     if notifications::run_scheduled(&env).await.is_err() {
         console_error!("scheduled: notification failure");
     }

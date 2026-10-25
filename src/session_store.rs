@@ -1,7 +1,6 @@
 //! A `tower-sessions` store that keeps records in D1, so every isolate reads
 //! the same sessions. Rows are keyed by the SHA-256 of the session id: a copy
 //! of the table holds no usable cookie value.
-#![expect(dead_code, reason = "wired up by the login routes")]
 use crate::repository::Db;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest as _, Sha256};
@@ -127,6 +126,40 @@ impl SessionStore for D1SessionStore {
         })
         .await
         .map_err(backend)
+    }
+}
+
+/// An in-memory store for tests of code that needs a `SessionStore`.
+#[cfg(test)]
+pub mod testing {
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+    use tower_sessions::{
+        SessionStore,
+        session::{Id, Record},
+        session_store::Result,
+    };
+
+    #[derive(Clone, Debug, Default)]
+    pub struct Memory(Arc<Mutex<HashMap<Id, Record>>>);
+    #[async_trait::async_trait]
+    impl SessionStore for Memory {
+        async fn create(&self, record: &mut Record) -> Result<()> {
+            self.save(record).await
+        }
+        async fn save(&self, record: &Record) -> Result<()> {
+            self.0.lock().unwrap().insert(record.id, record.clone());
+            Ok(())
+        }
+        async fn load(&self, id: &Id) -> Result<Option<Record>> {
+            Ok(self.0.lock().unwrap().get(id).cloned())
+        }
+        async fn delete(&self, id: &Id) -> Result<()> {
+            self.0.lock().unwrap().remove(id);
+            Ok(())
+        }
     }
 }
 

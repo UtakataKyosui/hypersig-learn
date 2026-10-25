@@ -1,5 +1,4 @@
 //! D1 storage for users, external identities, sessions and OAuth flows.
-#![expect(dead_code, reason = "wired up by the session store and login routes")]
 use crate::repository::Db;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;

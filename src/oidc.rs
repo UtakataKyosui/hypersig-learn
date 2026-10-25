@@ -7,7 +7,6 @@
 //! is read on the next sign-in, and a key Google withdrew stops being trusted.
 //! `openidconnect` verifies the signature, `iss`, `aud`, `exp` and `nonce`; it
 //! does not check `azp`, so [`verify`] does.
-#![expect(dead_code, reason = "wired up by the login routes")]
 use chrono::{DateTime, Utc};
 use openidconnect::core::{
     CoreAuthPrompt, CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreIdTokenVerifier,
@@ -81,7 +80,7 @@ impl Config {
 }
 
 /// One HTTP request, which is all [`Fetch`] and a test double provide.
-pub type Pending<'c> = Pin<Box<dyn Future<Output = Result<HttpResponse, Error>> + 'c>>;
+pub type Pending<'c> = Pin<Box<dyn Future<Output = Result<HttpResponse, Error>> + Send + 'c>>;
 
 /// Whether the module may send `request`: HTTPS, a Google host and the
 /// default port.
@@ -175,7 +174,7 @@ pub struct Started {
 }
 
 /// Builds the authorization request: code flow, PKCE S256, the `openid`
-/// scope only, and a state and nonce that are 256 random bits each.
+/// scope only, and a state and nonce that are 128 random bits each.
 pub async fn start<C>(client: &C, config: &Config) -> Result<Started, Error>
 where
     C: for<'c> openidconnect::AsyncHttpClient<'c, Error = Error>,

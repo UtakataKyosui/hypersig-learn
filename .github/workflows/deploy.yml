@@ -45,19 +45,20 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
-          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-          AUTH_PASSWORD: ${{ secrets.AUTH_PASSWORD }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REDIRECT_URL: ${{ secrets.GOOGLE_REDIRECT_URL }}
         run: |
-          for name in VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT AUTH_SECRET AUTH_PASSWORD; do
+          for name in VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL; do
             if [ -z "$(printenv "$name")" ]; then
               echo "GitHub secret $name is missing: see docs/persistence-auth.md and docs/ci-cd.md" >&2
               exit 1
             fi
           done
-          if [ "${#AUTH_SECRET}" -lt 32 ]; then
-            echo "AUTH_SECRET must contain at least 32 bytes" >&2
-            exit 1
-          fi
+          case "$GOOGLE_REDIRECT_URL" in
+            https://*/auth/google/callback) ;;
+            *) echo "GOOGLE_REDIRECT_URL must be an https URL ending in /auth/google/callback" >&2; exit 1 ;;
+          esac
       - name: Apply D1 migrations before deploying
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -69,8 +70,9 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
-          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-          AUTH_PASSWORD: ${{ secrets.AUTH_PASSWORD }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REDIRECT_URL: ${{ secrets.GOOGLE_REDIRECT_URL }}
         with:
           # The action's default Wrangler 3 cannot read `[exports.Hub]`.
           wranglerVersion: "4.152.0"
@@ -78,11 +80,12 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           vars: |
             VAPID_PUBLIC_KEY
+            GOOGLE_CLIENT_ID
+            GOOGLE_REDIRECT_URL
           secrets: |
             VAPID_PRIVATE_KEY
             VAPID_SUBJECT
-            AUTH_SECRET
-            AUTH_PASSWORD
+            GOOGLE_CLIENT_SECRET
       - name: Show the Wrangler log
         if: failure() && steps.deploy.outcome == 'failure'
         run: |

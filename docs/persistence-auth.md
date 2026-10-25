@@ -2,13 +2,13 @@
 
 ## 起動とデプロイ
 
-1. `.dev.vars` に `AUTH_SECRET`（暗号学的乱数32バイト以上を符号化した文字列）、`AUTH_PASSWORD`（本人だけが知る十分に長いパスワード）を設定する。値はコミットしない。
+1. `.dev.vars` に `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REDIRECT_URL` を設定する。値はコミットしない。設定手順は [google-auth.md](google-auth.md)。
 2. `npx wrangler d1 migrations apply app --local` を実行する。再実行は適用済み migration をスキップする。既存 counter / push_probe テーブルと値は保持する。
-3. `npx wrangler dev` で起動し、`/login` を開く。Cookie は `__Host-medication`、有効期限24時間、HttpOnly / Secure / SameSite=Lax / Path=/。本番は HTTPS で利用する。HTTP localhost での Cookie 保持は Arc で確認したが、Safari では保持されず再びログインへ戻った。Safari の開発確認には信頼済み証明書の HTTPS 環境が必要。
+3. `npx wrangler dev` で起動し、`/login` を開く。Cookie は `__Host-session`（セッション ID のみ）、HttpOnly / Secure / SameSite=Lax / Path=/。サーバー側の有効期限は24時間。本番は HTTPS で利用する。HTTP localhost での Cookie 保持は Arc で確認したが、Safari では保持されず再びログインへ戻った。Safari の開発確認には信頼済み証明書の HTTPS 環境が必要。
 
-本番への適用は既存の main デプロイ CI が担当する。merge 前に GitHub Secrets `AUTH_SECRET` と `AUTH_PASSWORD` を利用者が登録する。CI は秘密の存在と署名鍵の最小長を確認してから migration、Worker の順で適用する。この PR の作成時には本番 migration、secret 登録、デプロイを行っていない。
+本番への適用は既存の main デプロイ CI が担当する。merge 前に GitHub Secrets `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REDIRECT_URL` を利用者が登録する。CI は秘密の存在とリダイレクト URL の形式を確認してから migration、Worker の順で適用する。この PR の作成時には本番 migration、secret 登録、デプロイを行っていない。
 
-パスワードまたは署名鍵を変更すると、別 isolate を含む全 Cookie が失効する。ログアウト Action はブラウザの Cookie を削除する。無状態のため、コピー済み Cookie の個別失効はできず、全失効には設定のローテーションが必要。長時間接続中の stream は接続時に認証し、再接続時に再検証する。
+セッションは D1 の `sessions` に保存され、ログアウト Action は記録を削除して Cookie を消す。利用者単位の失効は `users.session_version` の加算または `status='disabled'` で行う。長時間接続中の stream は接続時に認証し、再接続時に再検証する。
 
 ## 保存境界
 
@@ -22,9 +22,9 @@
 
 ## 認証・購読
 
-全ページ／Action／stream を認証 middleware で保護し、各データ handler も Member extractor を必須とする。所有者はサーバーが `owner` に固定し、入力には所有者フィールドを持たない。ページの navigation は `/login` へ移動し、Action / stream と直接 API 呼出は401。公開対象はログインと固定の PWA／runtime assets のみ。認証後の応答は no-store。
+全ページ／Action／stream を認証 middleware で保護し、各データ handler も Member extractor を必須とする。所有者は認証済みセッションのアプリ内利用者 ID で、入力には所有者フィールドを持たない。ページの navigation は `/login` へ移動し、Action / stream と直接 API 呼出は401。公開対象はログイン、Google ログイン開始と callback、固定の PWA／runtime assets のみ。認証後の応答は no-store。
 
-POST の Sec-Fetch-Site、JSON Content-Type、引数 deserialize の拒否は hypersig 0.4.1 が担当する。ログインも typed Action を通る。独自の更新用 JSON ルートは作らない。
+POST の Sec-Fetch-Site、JSON Content-Type、引数 deserialize の拒否は hypersig 0.4.1 が担当する。Google への遷移と callback は Google が起こす GET ナビゲーションのため、typed Action ではなく通常のルートで、フローの `state` とブラウザの結び付けが CSRF 対策を担う。独自の更新用 JSON ルートは作らない。
 
 SUBSCRIPTION_STATUS は本人の endpoint に対する有効状態だけを返す。購読は HTTPS の許可 Push ホストと P-256／auth 鍵を検証する。endpoint ごとに一意、同じ所有者の再登録は鍵更新・再有効化、別所有者への移管は拒否する。UNREGISTER は本人の endpoint 文字列を受けて無効化し、未完了配信と予約済み probe を取消する。404/410 による失効も無効化する。送信時の redirect は追わず、鍵が差し替わった購読を古い応答で失効させない。
 
@@ -36,7 +36,7 @@ SUBSCRIPTION_STATUS は本人の endpoint に対する有効状態だけを返�
 - `python3 scripts/test-persistence.py` は production の SQL を SQLite で実行し、独立した接続からの読み出し、競合／重複失敗の全ロールバック、版更新と取消、所有者、購読再登録／無効化、FK／一意制約を確認する。CI でも実行する。
 - 一時ローカル D1 への migration 適用・再適用を Wrangler 4.152.0 で確認。
 - ローカル Worker HTTP でログイン、Cookie 属性、CRUD再読込、競合、別薬の枠奪取拒否、400/401/403/415、購読再登録・解除を確認。
-- `scripts/test-worker.py` は localhost:8791 の使い捨て環境専用。AUTH_PASSWORD=`local-test-password`、AUTH_SECRET=検証用32文字以上を設定して起動し、同じローカル D1 に migration を適用してから実行する。実在しない購読を保存するが、通知送信は行わない。ログアウト、改ざん Cookie 拒否、公開 manifest も含む25項目を実行した。
+- `scripts/test-worker.py` は localhost:8791 の使い捨て環境専用。Google の設定値をダミーで与えて起動し、同じローカル D1 に migration を適用してから実行する。Google アカウントは使わず、`scripts/auth_fixture.py` が利用者とセッションをローカル D1 へ投入する。実在しない購読を保存するが、通知送信は行わない。ログイン開始の redirect、callback の不正入力と再利用、旧 Cookie の拒否、2利用者間の分離、失効、ログアウト、公開 manifest を含む45項目を実行した。
 - ネイティブブラウザの UI 操作で確認：Safari で未認証ページからログインへ移動、パスワード入力 binding と不正入力時の401表示。Arc で正しい入力からログインに成功し、服薬設定ページの表示と再読込後の認証保持を確認。テスト用パスワードはブラウザに保存していない。
 - 購読失効についても SQL テストで、古い鍵への遅延した失効応答が差し替え済みの購読を無効にしないことと、現在の鍵に対する失効が配信取消まで反映されることを確認。
 - 実際の端末 Push と本番 Cron、実際の複数 isolate での試験は後続工程として未実施。Rust の Router テストと HTTP リクエストごとに新規作成される AppState、SQLite の別接続を使って永続性の境界を検証した。
