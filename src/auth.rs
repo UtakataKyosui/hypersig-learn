@@ -179,7 +179,11 @@ impl Notice {
 }
 
 async fn page(_: AppState, session: Session, (): ()) -> Page<Login> {
-    use hypersig::html::{a, div, p};
+    use hypersig::html::{a, main};
+    use hypersig_ui::{
+        AlertVariant, ButtonSize, ButtonVariant, Level, alert, alert_description, alert_title,
+        button_style, card, card_content, card_description, card_header, card_title,
+    };
     let notice = session.get::<String>(NOTICE).await.ok().flatten();
     if notice.is_some() {
         pin(&session).await;
@@ -194,10 +198,34 @@ async fn page(_: AppState, session: Session, (): ()) -> Page<Login> {
             problem: problem.clone(),
         },
     )
+    .global(hypersig_ui::global())
+    .theme(hypersig_ui::theme())
     .child(
-        div()
-            .child(a().href(START.link()).text("Google でログイン"))
-            .child(p().bind_text(Login::problem())),
+        main()
+            .attr("style", "max-width:28rem;margin:0 auto;padding:4rem 1rem")
+            .child(
+                card()
+                    .child(
+                        card_header()
+                            .child(card_title(Level::H2).text("ログイン"))
+                            .child(card_description().text("Google アカウントでログインします。")),
+                    )
+                    .child(
+                        card_content()
+                            .child(
+                                a().href(START.link())
+                                    .css(button_style(ButtonVariant::Default, ButtonSize::Lg))
+                                    .attr("style", "text-decoration:none")
+                                    .text("Google でログイン"),
+                            )
+                            .child(
+                                alert(AlertVariant::Destructive)
+                                    .show(!Login::problem().is_empty())
+                                    .child(alert_title().text("ログインできません"))
+                                    .child(alert_description().bind_text(Login::problem())),
+                            ),
+                    ),
+            ),
     )
 }
 
