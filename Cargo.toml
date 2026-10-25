@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 # Without its default features, which need tokio's networking, so that axum
 # builds for wasm32-unknown-unknown.
 axum = { version = "0.8", default-features = false }
