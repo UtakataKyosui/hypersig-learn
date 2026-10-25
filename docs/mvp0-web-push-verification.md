@@ -89,6 +89,8 @@ Push サービス → SW(push) → showNotification → クリックで /notific
 
 ### 認証方式
 
+現在の実装・設定方法は [D1・認証・保存契約](persistence-auth.md) を参照。以下は工程0時点の選定記録。
+
 | 案 | 評価 |
 |---|---|
 | A. `tower-sessions` 0.14 ＋ D1 の自作 `SessionStore` | 公式の D1／KV ストアがなく、0.14 の `SessionStore` を Workers 向けに自作し wasm 互換を確認する必要がある。単一利用者には過剰 |

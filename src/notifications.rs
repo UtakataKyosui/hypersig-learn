@@ -2,8 +2,6 @@
 //! worker: a browser subscribes, the server saves and checks the
 //! subscription, and a scheduled invocation sends the probe notification.
 
-use std::rc::Rc;
-
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use hypersig::html::{Class, CustomEvent, div, el, h1, main, p};
@@ -13,8 +11,7 @@ use hypersig_ui::{
     card, card_content, card_description, card_header, card_title,
 };
 use serde::{Deserialize, Serialize};
-use worker::send::{SendFuture, SendWrapper};
-use worker::{D1Database, Date, Env, console_error, console_log};
+use worker::{Date, Env, console_error, console_log};
 
 use crate::AppState;
 use crate::assets;
@@ -46,6 +43,10 @@ const PUSH_SUBSCRIPTION: CustomEvent<SubscriptionInput> = CustomEvent::new("push
 pub const REGISTER: Action<NotificationSettings, SubscriptionInput> =
     Action::post("/notifications/subscription");
 pub const SCHEDULE_PROBE: Action<NotificationSettings, ()> = Action::post("/notifications/probe");
+pub const UNREGISTER: Action<NotificationSettings, String> =
+    Action::post("/notifications/unsubscribe");
+pub const SUBSCRIPTION_STATUS: Action<NotificationSettings, String> =
+    Action::post("/notifications/subscription/status");
 
 /// How long after its time a probe is still sent: the 15-minute deadline of
 /// the MVP.
@@ -110,19 +111,18 @@ pub fn validate(input: &SubscriptionInput) -> Result<Subscription, InvalidSubscr
     Ok(subscription)
 }
 
-/// A D1 or configuration failure. The visitor reads a fixed message and the
-/// log keeps the cause.
-pub struct StoreError(worker::Error);
+/// A D1 failure. Neither the public message nor the log includes stored values.
+pub struct StoreError;
 
 impl From<worker::Error> for StoreError {
-    fn from(error: worker::Error) -> Self {
-        Self(error)
+    fn from(_: worker::Error) -> Self {
+        Self
     }
 }
 
 impl IntoResponse for StoreError {
     fn into_response(self) -> Response {
-        console_error!("notifications: {}", self.0);
+        console_error!("notifications: storage failure");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "保存できませんでした。もう一度お試しください。",
@@ -131,64 +131,15 @@ impl IntoResponse for StoreError {
     }
 }
 
-type Db = SendWrapper<Rc<D1Database>>;
-
-const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS push_probe (\
-    id INTEGER PRIMARY KEY CHECK (id = 1), \
-    endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, \
-    probe_at INTEGER)";
-
-#[derive(Deserialize)]
-struct Row {
-    endpoint: String,
-    p256dh: String,
-    auth: String,
-    probe_at: Option<f64>,
-}
-
 fn now_ms() -> u64 {
     Date::now().as_millis()
 }
 
-async fn save_subscription(db: Db, subscription: Subscription) -> Result<(), StoreError> {
-    SendFuture::new(async move {
-        db.exec(SCHEMA).await?;
-        db.prepare(
-            "INSERT INTO push_probe (id, endpoint, p256dh, auth) VALUES (1, ?1, ?2, ?3) \
-             ON CONFLICT (id) DO UPDATE SET endpoint = excluded.endpoint, \
-             p256dh = excluded.p256dh, auth = excluded.auth, probe_at = NULL",
-        )
-        .bind(&[
-            subscription.endpoint.into(),
-            subscription.p256dh.into(),
-            subscription.auth.into(),
-        ])?
-        .run()
-        .await?;
-        Ok(())
-    })
-    .await
-}
-
-/// Sets the probe time. Returns whether there was a subscription to set it on.
-async fn schedule_probe(db: Db, at_ms: u64) -> Result<bool, StoreError> {
-    SendFuture::new(async move {
-        db.exec(SCHEMA).await?;
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "millisecond timestamps fit in f64"
-        )]
-        let result = db
-            .prepare("UPDATE push_probe SET probe_at = ?1 WHERE id = 1")
-            .bind(&[(at_ms as f64).into()])?
-            .run()
-            .await?;
-        Ok(result.meta()?.and_then(|meta| meta.changes).unwrap_or(0) > 0)
-    })
-    .await
-}
-
-pub async fn settings_page(state: AppState, (): ()) -> Page<NotificationSettings> {
+pub async fn settings_page(
+    state: AppState,
+    _: crate::auth::Member,
+    (): (),
+) -> Page<NotificationSettings> {
     settings_view(&state.vapid_public)
 }
 
@@ -271,10 +222,18 @@ fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
 
 pub async fn register(
     state: AppState,
+    member: crate::auth::Member,
     input: SubscriptionInput,
 ) -> Result<Patches<NotificationSettings>, ProbeError> {
     let subscription = validate(&input)?;
-    save_subscription(state.db.clone(), subscription).await?;
+    crate::repository::subscribe(
+        &state.db,
+        member.owner(),
+        subscription,
+        hypersig::Timestamp::now().as_millis(),
+    )
+    .await
+    .map_err(ProbeError::Repository)?;
     Ok(NotificationSettings::saved()
         .patch(true)
         .and(NotificationSettings::problem().patch(String::new()))
@@ -283,10 +242,14 @@ pub async fn register(
 
 pub async fn schedule(
     state: AppState,
+    _: crate::auth::Member,
     (): (),
 ) -> Result<Patches<NotificationSettings>, ProbeError> {
     let at = now_ms() + PROBE_DELAY_MS;
-    if !schedule_probe(state.db.clone(), at).await? {
+    if !crate::repository::schedule_probe(&state.db, at)
+        .await
+        .map_err(StoreError::from)?
+    {
         return Err(ProbeError::NotSubscribed);
     }
     Ok(NotificationSettings::probe()
@@ -295,6 +258,7 @@ pub async fn schedule(
 }
 
 pub enum ProbeError {
+    Repository(crate::medications::Error),
     Invalid(InvalidSubscription),
     Store(StoreError),
     NotSubscribed,
@@ -315,6 +279,7 @@ impl From<StoreError> for ProbeError {
 impl IntoResponse for ProbeError {
     fn into_response(self) -> Response {
         match self {
+            Self::Repository(error) => error.into_response(),
             Self::Invalid(error) => error.into_response(),
             Self::Store(error) => error.into_response(),
             Self::NotSubscribed => (
@@ -326,6 +291,36 @@ impl IntoResponse for ProbeError {
     }
 }
 
+pub async fn unregister(
+    state: AppState,
+    member: crate::auth::Member,
+    endpoint: String,
+) -> Result<Patches<NotificationSettings>, ProbeError> {
+    crate::repository::unsubscribe(
+        &state.db,
+        member.owner(),
+        &endpoint,
+        hypersig::Timestamp::now().as_millis(),
+    )
+    .await
+    .map_err(ProbeError::Repository)?;
+    Ok(NotificationSettings::saved().patch(false).into())
+}
+
+pub async fn subscription_status(
+    state: AppState,
+    member: crate::auth::Member,
+    endpoint: String,
+) -> Result<Patches<NotificationSettings>, ProbeError> {
+    if !endpoint_is_allowed(&endpoint) {
+        return Err(InvalidSubscription::Endpoint.into());
+    }
+    let saved = crate::repository::subscription_enabled(&state.db, member.owner(), &endpoint)
+        .await
+        .map_err(ProbeError::Repository)?;
+    Ok(NotificationSettings::saved().patch(saved).into())
+}
+
 /// The scheduled invocation: sends the probe if its time has come and it is
 /// within the deadline. The claim is a conditional update, so two
 /// invocations do not both send it.
@@ -334,69 +329,29 @@ pub async fn run_scheduled(env: &Env) -> worker::Result<()> {
     let private_key = env.secret("VAPID_PRIVATE_KEY")?.to_string();
     let subject = env.secret("VAPID_SUBJECT")?.to_string();
     let now = now_ms();
-    db.exec(SCHEMA).await?;
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "millisecond timestamps fit in f64"
-    )]
-    let (now_f, oldest) = (now as f64, now.saturating_sub(DEADLINE_MS) as f64);
-    let Some(row) = db
-        .prepare("SELECT endpoint, p256dh, auth, probe_at FROM push_probe WHERE id = 1 AND probe_at IS NOT NULL AND probe_at <= ?1 AND probe_at >= ?2")
-        .bind(&[now_f.into(), oldest.into()])?
-        .first::<Row>(None)
-        .await?
+    let Some((subscription, probe_at)) =
+        crate::repository::claim_probe(&db, now, DEADLINE_MS).await?
     else {
         return Ok(());
-    };
-    let Some(probe_at) = row.probe_at else {
-        return Ok(());
-    };
-    let claimed = db
-        .prepare("UPDATE push_probe SET probe_at = NULL WHERE id = 1 AND probe_at = ?1")
-        .bind(&[probe_at.into()])?
-        .run()
-        .await?;
-    if claimed.meta()?.and_then(|meta| meta.changes).unwrap_or(0) == 0 {
-        return Ok(());
-    }
-    let subscription = Subscription {
-        endpoint: row.endpoint,
-        p256dh: row.p256dh,
-        auth: row.auth,
     };
     let sent = push::send(&subscription, b"probe", &subject, &private_key, now / 1000).await;
     let outcome = match sent {
         Ok(outcome) => outcome,
         Err(error) => {
-            restore_claim(&db, &subscription.endpoint, probe_at).await?;
+            crate::repository::restore_claim(&db, &subscription.endpoint, probe_at).await?;
             return Err(error);
         }
     };
     console_log!("push probe: {outcome:?}");
     match outcome {
         Outcome::Expired => {
-            db.prepare("DELETE FROM push_probe WHERE id = 1 AND endpoint = ?1")
-                .bind(&[subscription.endpoint.as_str().into()])?
-                .run()
-                .await?;
+            crate::repository::expire_subscription(&db, &subscription).await?;
         }
         Outcome::Retry => {
-            restore_claim(&db, &subscription.endpoint, probe_at).await?;
+            crate::repository::restore_claim(&db, &subscription.endpoint, probe_at).await?;
         }
         Outcome::Accepted | Outcome::Rejected(_) => {}
     }
-    Ok(())
-}
-
-/// Puts the claimed probe time back, unless the subscription was replaced or
-/// a newer probe was reserved while the send was in flight.
-async fn restore_claim(db: &D1Database, endpoint: &str, probe_at: f64) -> worker::Result<()> {
-    db.prepare(
-        "UPDATE push_probe SET probe_at = ?1 WHERE id = 1 AND probe_at IS NULL AND endpoint = ?2",
-    )
-    .bind(&[probe_at.into(), endpoint.into()])?
-    .run()
-    .await?;
     Ok(())
 }
 

@@ -19,6 +19,10 @@ npx wrangler dev
 
 http://localhost:8787 で開く。D1 は `.wrangler/` の SQLite に保存される。Web Push を試すには、次の「セットアップ」の手順 2 で `.dev.vars` に VAPID の値を書く。
 
+初回起動前に `npx wrangler d1 migrations apply app --local` を実行する。
+`.dev.vars` に `AUTH_PASSWORD` とランダムな32バイト以上の `AUTH_SECRET` を設定し、`/login` からログインする。
+本番では同名の GitHub Secrets が必要。認証・保存契約と検証結果は [docs/persistence-auth.md](docs/persistence-auth.md) を参照。
+
 ## セットアップ（初回のみ）
 
 デプロイは GitHub Actions が行う。必要な設定は GitHub Secrets に置き、デプロイのたびに Worker へ渡される。
@@ -39,6 +43,7 @@ http://localhost:8787 で開く。D1 は `.wrangler/` の SQLite に保存され
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
+python3 scripts/test-persistence.py
 cargo check --target wasm32-unknown-unknown
 ```
 

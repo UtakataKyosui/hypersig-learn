@@ -6,7 +6,7 @@ use crate::domain::{
 use hypersig::{FieldErrors, Form, Rules, Sig, Signals, Validate};
 use serde::{Deserialize, Serialize};
 
-#[derive(Signals, Serialize, Deserialize)]
+#[derive(Clone, Signals, Serialize, Deserialize)]
 pub struct MedicationInput {
     pub name: String,
     pub start: String,
@@ -100,7 +100,7 @@ impl MedicationInput {
     }
 }
 
-#[derive(Signals, Serialize, Deserialize)]
+#[derive(Clone, Signals, Serialize, Deserialize)]
 pub struct DoseSlotInput {
     pub time: String,
     pub amount: String,
@@ -172,7 +172,7 @@ impl DoseSlotInput {
     }
 }
 
-#[derive(Signals, Serialize, Deserialize)]
+#[derive(Clone, Signals, Serialize, Deserialize)]
 pub struct PauseInput {
     pub start: String,
     pub end: String,

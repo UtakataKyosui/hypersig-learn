@@ -16,6 +16,7 @@ base64 = "0.22"
 futures = "0.3"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 hkdf = "0.13"
+hmac = "0.13"
 hypersig = "0.4.1"
 hypersig_ui = "0.4.1"
 js-sys = "0.3.106"
@@ -28,6 +29,9 @@ tower-service = "0.3"
 # the `wasm_bindgen` crate by that path.
 wasm-bindgen = "0.2"
 worker = { version = "0.8", features = ["http", "axum", "d1"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 
 # Clippy's pedantic group adds warnings for code that compiles but hides a
 # mistake or reads worse, such as a cast that can lose digits or an argument
