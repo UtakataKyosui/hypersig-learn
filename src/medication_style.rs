@@ -19,5 +19,25 @@ pub const STYLE: Stylesheet = Stylesheet::new(
 .med-status[data-state='disabled'], .med-status[data-state='ended'], .med-status[data-state='empty'] { color: var(--muted-foreground, #6b6b74); }
 .med-link { color: inherit; font-weight: 600; }
 .med-pad { padding-inline: 1.5rem; margin: 0; }
+@media (pointer: coarse) {
+  .med-shell input:not([type='checkbox']):not([type='radio']), .med-shell select { font-size: 1rem; min-height: 2.75rem; }
+  .med-shell button { min-height: 2.75rem; }
+  .med-shell label:has(input[type='radio']) { min-height: 2.75rem; display: flex; align-items: center; }
+}
 ",
 );
+
+#[cfg(test)]
+mod tests {
+    use super::STYLE;
+
+    /// iOS Safari zooms the page when a control under 16px takes focus, and
+    /// the controls need a finger-sized height on a touch screen.
+    #[test]
+    fn touch_screens_get_sixteen_pixel_controls_and_finger_sized_targets() {
+        let css = STYLE.css();
+        assert!(css.contains("@media (pointer: coarse)"));
+        assert!(css.contains("font-size: 1rem; min-height: 2.75rem;"));
+        assert!(css.contains(".med-shell button { min-height: 2.75rem; }"));
+    }
+}
