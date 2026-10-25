@@ -94,7 +94,7 @@ pub fn encrypt_with(
     record.push(2);
     let cipher = Aes128Gcm::new_from_slice(&key).map_err(|_| PushError::Encrypt)?;
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), record.as_slice())
+        .encrypt(&Nonce::from(nonce), record.as_slice())
         .map_err(|_| PushError::Encrypt)?;
 
     let mut body = Vec::with_capacity(86 + ciphertext.len());
