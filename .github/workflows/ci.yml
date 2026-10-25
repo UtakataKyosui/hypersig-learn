@@ -72,9 +72,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    env:
-      PERSIST_DIR: ${{ runner.temp }}/e2e
     steps:
+      # The `runner` context is not available in a job-level `env`.
+      - run: echo "PERSIST_DIR=$RUNNER_TEMP/e2e" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
