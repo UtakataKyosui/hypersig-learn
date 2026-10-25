@@ -68,6 +68,14 @@ jobs:
           secrets: |
             VAPID_PRIVATE_KEY
             VAPID_SUBJECT
+      - name: Show the Wrangler log
+        if: failure() && steps.deploy.outcome == 'failure'
+        run: |
+          for log in ~/.config/.wrangler/logs/*.log; do
+            echo "::group::$log"
+            cat "$log"
+            echo "::endgroup::"
+          done
       - name: Smoke test
         env:
           URL: ${{ steps.deploy.outputs.deployment-url }}
