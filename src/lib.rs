@@ -12,8 +12,11 @@
 //! reaches the tabs of the others through the `Hub` Durable Object.
 
 mod assets;
+pub mod domain;
+pub mod medication_input;
 mod notifications;
 mod push;
+pub mod schedule_view;
 
 use std::cell::RefCell;
 use std::rc::Rc;
