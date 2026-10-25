@@ -26,12 +26,11 @@ class_name = "Hub"
 type = "durable-object"
 storage = "sqlite"
 
-# The VAPID public key is not secret. Set the private key with
-# `npx wrangler secret put VAPID_PRIVATE_KEY`, and never write it here.
-# `VAPID_SUBJECT` is a `mailto:` or `https:` contact for the push services.
+# The VAPID public key is not secret. `scripts/setup-vapid.sh` writes it here
+# and stores the private key and the contact address as the secrets
+# `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`, which never belong in this file.
 [vars]
 VAPID_PUBLIC_KEY = ""
-VAPID_SUBJECT = "mailto:admin@example.com"
 
 # Every minute, UTC.
 [triggers]

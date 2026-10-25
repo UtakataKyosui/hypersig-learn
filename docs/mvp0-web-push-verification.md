@@ -115,10 +115,8 @@ Push サービス → SW(push) → showNotification → クリックで /notific
 
 ### 準備
 
-1. VAPID 鍵対を作る。例：`node -e 'const c=require("crypto");const k=c.generateKeyPairSync("ec",{namedCurve:"prime256v1"}).privateKey.export({format:"jwk"});console.log("private",k.d);console.log("public",Buffer.concat([Buffer.from([4]),Buffer.from(k.x,"base64url"),Buffer.from(k.y,"base64url")]).toString("base64url"))'`
-2. `wrangler.toml` の `VAPID_PUBLIC_KEY` に公開鍵、`VAPID_SUBJECT` に連絡先を設定する。
-3. `npx wrangler secret put VAPID_PRIVATE_KEY` で秘密鍵を登録する。秘密鍵をチャット・Issue・コミットに貼らない。
-4. `npx wrangler deploy`（`workers.dev` の HTTPS）。
+1. `scripts/setup-vapid.sh` で VAPID 鍵対と連絡先を設定する。秘密鍵と連絡先は Worker secret に入り、公開鍵は `wrangler.toml` に書かれる（詳細は `docs/ci-cd.md`）。秘密鍵をチャット・Issue・コミットに貼らない。
+2. `npx wrangler deploy`（`workers.dev` の HTTPS）。
 
 ### 手順
 
