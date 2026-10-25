@@ -47,12 +47,17 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Require the D1 database id
+      - name: Set the D1 database id
+        env:
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
         run: |
-          if ! sed -En '/^database_id = "[^"]+"/p' wrangler.toml | read -r _; then
-            echo "database_id in wrangler.toml is missing: deploy once by hand and commit it" >&2
-            exit 1
-          fi
+          case "$D1_DATABASE_ID" in
+            ????????-????-????-????-????????????) ;;
+            *) echo "GitHub secret D1_DATABASE_ID is missing or malformed: run scripts/setup-d1.sh" >&2; exit 1 ;;
+          esac
+          awk -v id="$D1_DATABASE_ID" '{ print } /^database_name = / { print "database_id = \"" id "\"" }' wrangler.toml > wrangler.toml.tmp
+          mv wrangler.toml.tmp wrangler.toml
+          sed -n '/^\[\[d1_databases\]\]/,/^$/p' wrangler.toml
       - name: Require the VAPID settings
         env:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}

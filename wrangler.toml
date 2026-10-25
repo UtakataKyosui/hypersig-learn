@@ -9,8 +9,8 @@ command = "sh scripts/build.sh"
 
 # The database the counter is saved in, which the worker reads as `DB`.
 # `wrangler dev` keeps it in a local SQLite file under `.wrangler/`. The entry
-# names no `database_id`, so the first `wrangler deploy` creates the database
-# on the account and writes its id here.
+# names no `database_id`: the deploy workflow writes the id from the GitHub
+# secret `D1_DATABASE_ID`, which `scripts/setup-d1.sh` stores.
 [[d1_databases]]
 binding = "DB"
 database_name = "app"
