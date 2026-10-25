@@ -168,6 +168,7 @@ fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
             main()
                 .class(Class::new("shell"))
                 .child(h1().text("通知設定"))
+                .child(crate::auth::sign_out_button())
                 .child(
                     card()
                         .child(

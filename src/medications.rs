@@ -229,7 +229,8 @@ pub async fn page(state: AppState, member: Member, (): ()) -> Result<Page<Settin
             problem: String::new(),
         },
     )
-    .child(hypersig::html::p().text("服薬設定 · Asia/Tokyo")))
+    .child(hypersig::html::p().text("服薬設定 · Asia/Tokyo"))
+    .child(crate::auth::sign_out_button()))
 }
 pub fn random_id() -> Result<String, Error> {
     use base64::Engine as _;

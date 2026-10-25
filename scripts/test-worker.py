@@ -108,7 +108,9 @@ assert not auth_fixture.query(PERSIST, f"SELECT 1 FROM oauth_flows WHERE state='
 # A signed-in user. The login page links to the sign-in start route with a plain anchor.
 (_, login_html) = page('/login', 200)
 assert re.search(r'<a [^>]*href="/auth/google"', login_html), login_html
-page('/medications', 200, cookie_a)
+for path in ['/', '/medications', '/notifications']:
+    (_, html) = page(path, 200, cookie_a)
+    assert 'ログアウト' in html and '/auth/logout' in html, path
 (_, notifications_html) = page('/notifications', 200, cookie_a)
 assert user_a not in notifications_html and user_b not in notifications_html and '利用者 ID' not in notifications_html
 # Touching a signed-in session on a sign-in route cannot move its deadline.
@@ -190,5 +192,24 @@ with urllib.request.urlopen(r) as response:
 checks += 1
 assert len(auth_fixture.query(PERSIST, 'SELECT id FROM sessions')) == stored - 1
 request('/medications/load', 'x', 401, cookie=cookie_a)
+# Unauthenticated starts and callbacks are bounded: a callback without a started flow
+# writes no session row, and a client gets a fixed number of live flows.
+def count(table):
+    return auth_fixture.query(PERSIST, f'SELECT count(*) AS n FROM {table}')[0]['n']
+auth_fixture.execute(PERSIST, 'DELETE FROM oauth_flows')
+sessions_before = count('sessions')
+for query in ['', 'state=x&code=y', 'state=x&error=access_denied']:
+    request('/auth/google/callback?' + query, expected=303, cookie='__Host-session=AAAAAAAAAAAAAAAAAAAAAA')
+    request('/auth/google/callback?' + query, expected=303)
+assert count('sessions') == sessions_before
+for _ in range(10):
+    request('/auth/google', expected=303)
+assert count('oauth_flows') == 10 and count('sessions') <= sessions_before + 10
+(r, body) = request('/auth/google', expected=429)
+assert r.headers['Retry-After'] == '600' and 'Set-Cookie' not in r.headers and r.headers['Cache-Control'] == 'no-store'
+assert count('oauth_flows') == 10 and count('sessions') <= sessions_before + 10
+auth_fixture.execute(PERSIST, "UPDATE oauth_flows SET expires_at=1")
+request('/auth/google', expected=303)
+auth_fixture.execute(PERSIST, 'DELETE FROM oauth_flows')
 request('/manifest.webmanifest')
 print(f'{checks} local Worker HTTP checks passed')

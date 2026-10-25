@@ -5,8 +5,8 @@ use serde::Deserialize;
 use wasm_bindgen::JsValue;
 use worker::send::SendFuture;
 
-const CREATE_FLOW: &str =
-    "INSERT INTO oauth_flows(state,nonce,pkce_verifier,binding,expires_at) VALUES(?1,?2,?3,?4,?5)";
+const RESERVE_FLOW: &str = "INSERT INTO oauth_flows(state,nonce,pkce_verifier,binding,expires_at,client) SELECT ?1,'','',?2,?3,?4 WHERE (SELECT count(*) FROM oauth_flows WHERE client=?4 AND expires_at>?5)<?6 RETURNING state";
+const FILL_FLOW: &str = "UPDATE oauth_flows SET state=?1,nonce=?2,pkce_verifier=?3 WHERE state=?4";
 const CONSUME_FLOW: &str = "DELETE FROM oauth_flows WHERE state=?1 AND binding=?2 AND expires_at>?3 RETURNING nonce,pkce_verifier";
 const INSERT_USER: &str = "INSERT INTO users(id,status,session_version,created_at) SELECT ?1,'active',1,?2 WHERE NOT EXISTS(SELECT 1 FROM external_identities WHERE issuer=?3 AND subject=?4)";
 const INSERT_IDENTITY: &str = "INSERT OR IGNORE INTO external_identities(issuer,subject,user_id,created_at) SELECT ?3,?4,?1,?2 WHERE EXISTS(SELECT 1 FROM users WHERE id=?1)";
@@ -47,22 +47,54 @@ impl User {
     }
 }
 
-pub async fn create_flow(
+/// Claims one of `limit` live flow slots for `client`, in one statement so
+/// concurrent starts cannot pass the count together. `None` means the client
+/// has too many unconsumed flows. The slot holds `reservation` as its state,
+/// which no callback can consume, until `fill_flow` gives it the real values.
+pub async fn reserve_flow(
     db: &Db,
+    reservation: &str,
+    binding: &str,
+    client: &str,
+    now: i64,
+    expires_at: i64,
+    limit: u32,
+) -> worker::Result<Option<()>> {
+    #[derive(Deserialize)]
+    struct Reserved {}
+    SendFuture::new(async {
+        Ok(db
+            .prepare(RESERVE_FLOW)
+            .bind(&[
+                reservation.into(),
+                binding.into(),
+                ms(expires_at),
+                client.into(),
+                ms(now),
+                limit.into(),
+            ])?
+            .first::<Reserved>(None)
+            .await?
+            .map(|Reserved {}| ()))
+    })
+    .await
+}
+
+/// Turns the slot held under `reservation` into the flow for `state`.
+pub async fn fill_flow(
+    db: &Db,
+    reservation: &str,
     state: &str,
     nonce: &str,
     verifier: &str,
-    binding: &str,
-    expires_at: i64,
 ) -> worker::Result<()> {
     SendFuture::new(async {
-        db.prepare(CREATE_FLOW)
+        db.prepare(FILL_FLOW)
             .bind(&[
                 state.into(),
                 nonce.into(),
                 verifier.into(),
-                binding.into(),
-                ms(expires_at),
+                reservation.into(),
             ])?
             .run()
             .await?;

@@ -148,6 +148,7 @@ class Accounts(unittest.TestCase):
             self.db.execute("INSERT INTO push_probe VALUES(1,'https://fcm.googleapis.com/a','k','a',5000)")
         self.db.executescript((ROOT / "migrations/0002_auth.sql").read_text())
         self.db.executescript((ROOT / "migrations/0003_owner_isolation.sql").read_text())
+        self.db.executescript((ROOT / "migrations/0004_flow_limit.sql").read_text())
 
     def connect(self):
         db = sqlite3.connect(self.path)
@@ -168,7 +169,9 @@ class Accounts(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT count(*) FROM medications").fetchone()[0], 1)
         self.assertEqual(self.db.execute("SELECT count(*) FROM push_subscriptions").fetchone()[0], 1)
         self.db.execute("CREATE TABLE d1_migrations(name TEXT)")
-        self.db.execute("INSERT INTO d1_migrations VALUES('0002_auth.sql'),('0003_owner_isolation.sql')")
+        self.db.execute("INSERT INTO d1_migrations VALUES('0002_auth.sql'),('0003_owner_isolation.sql'),('0004_flow_limit.sql')")
+        self.db.executescript((ROOT / "migrations/rollback/0004_flow_limit_down.sql").read_text())
+        self.assertNotIn("client", [row[1] for row in self.db.execute("PRAGMA table_info(oauth_flows)")])
         self.db.executescript((ROOT / "migrations/rollback/0003_owner_isolation_down.sql").read_text())
         self.assertEqual(self.db.execute("SELECT id,probe_at FROM push_probe").fetchall(), [(1, 5000)])
         self.db.executescript((ROOT / "migrations/rollback/0002_auth_down.sql").read_text())
@@ -205,7 +208,8 @@ class Accounts(unittest.TestCase):
 
     def test_flow_is_consumed_once_and_only_with_its_binding_before_expiry(self):
         with self.db:
-            self.db.execute(sql("INSERT INTO oauth_flows"), ("state", "nonce", "verifier", "binding", 5000))
+            self.db.execute(sql("INSERT INTO oauth_flows"), ("reservation", "binding", 5000, "client", 1000, 10))
+            self.db.execute(sql("UPDATE oauth_flows SET state"), ("state", "nonce", "verifier", "reservation"))
         other = self.connect()
         try:
             consume = sql("DELETE FROM oauth_flows WHERE state")
@@ -221,11 +225,31 @@ class Accounts(unittest.TestCase):
         finally:
             other.close()
 
+    def test_a_client_holds_a_bounded_number_of_live_flows(self):
+        reserve = sql("INSERT INTO oauth_flows")
+
+        def start(db, name, client, now, limit=2):
+            with db:
+                return db.execute(reserve, (name, "binding", now + 600, client, now, limit)).fetchall()
+
+        other = self.connect()
+        try:
+            self.assertEqual(start(self.db, "a", "client-1", 1000), [("a",)])
+            self.assertEqual(start(other, "b", "client-1", 1000), [("b",)])
+            self.assertEqual(start(self.db, "c", "client-1", 1000), [])
+            self.assertEqual(start(other, "d", "client-2", 1000), [("d",)])
+            # A reservation that no callback filled still counts until it expires.
+            self.assertEqual(start(self.db, "e", "client-1", 1599), [])
+            self.assertEqual(start(self.db, "f", "client-1", 1600), [("f",)])
+            self.assertEqual(self.db.execute("SELECT count(*) FROM oauth_flows WHERE client='client-1'").fetchone()[0], 3)
+        finally:
+            other.close()
+
     def test_purge_removes_only_expired_records(self):
         with self.db:
             self.db.execute("INSERT INTO sessions VALUES('old','{}',1000),('new','{}',9000)")
-            self.db.execute(sql("INSERT INTO oauth_flows"), ("s1", "n", "v", "b", 1000))
-            self.db.execute(sql("INSERT INTO oauth_flows"), ("s2", "n", "v", "b", 9000))
+            self.db.execute(sql("INSERT INTO oauth_flows"), ("s1", "b", 1000, "c", 0, 10))
+            self.db.execute(sql("INSERT INTO oauth_flows"), ("s2", "b", 9000, "c", 0, 10))
             self.db.execute(sql("DELETE FROM sessions WHERE expires_at"), (1000,))
             self.db.execute(sql("DELETE FROM oauth_flows WHERE expires_at"), (1000,))
         self.assertEqual(self.db.execute("SELECT id FROM sessions").fetchall(), [("new",)])
