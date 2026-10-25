@@ -309,6 +309,28 @@ impl Schedule {
                 }
             }
     }
+
+    /// First matching date at or after the lower bound, without scanning elapsed days.
+    fn next_date(&self, lower: LocalDate) -> Option<LocalDate> {
+        let lower = lower.max(self.start);
+        let ordinal = match self.recurrence {
+            Recurrence::Daily => i64::from(lower.0),
+            Recurrence::Every(interval) => {
+                let elapsed = i64::from(lower.0 - self.start.0);
+                let interval = i64::from(interval.get());
+                i64::from(self.start.0) + ((elapsed + interval - 1) / interval) * interval
+            }
+            Recurrence::Weekdays(days) => {
+                let offset = (0..7).find(|offset| {
+                    days.0 & (1 << ((i32::from(lower.weekday()) + offset) % 7)) != 0
+                })?;
+                i64::from(lower.0) + i64::from(offset)
+            }
+        };
+        let limit = self.end.map_or(year_start(10000) - 1, |end| end.0);
+        (ordinal <= i64::from(limit))
+            .then(|| LocalDate(i32::try_from(ordinal).expect("bounded calendar ordinal")))
+    }
 }
 /// Unix milliseconds at the persistence boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -377,7 +399,19 @@ impl Medication {
         if self.slots.is_empty() {
             return Ok(NextDose::NoUpcoming);
         }
-        loop {
+        while let Some(candidate) = self.schedule.next_date(date) {
+            date = candidate;
+            if let Some(end) = self
+                .pauses
+                .iter()
+                .filter(|pause| pause.contains(date))
+                .map(|pause| pause.end)
+                .max()
+            {
+                let Some(after_pause) = end.next() else { break };
+                date = after_pause;
+                continue;
+            }
             if let Some(item) = self
                 .on_date(date)
                 .into_iter()
@@ -387,9 +421,6 @@ impl Medication {
             }
             let Some(next) = date.next() else { break };
             date = next;
-            if self.schedule.end.is_some_and(|end| date > end) {
-                break;
-            }
         }
         Ok(NextDose::NoUpcoming)
     }
@@ -397,9 +428,12 @@ impl Medication {
     /// # Errors
     /// Returns an error when the clock is outside the supported calendar (years 1–9999).
     pub fn due(&self, now: UtcInstant) -> Result<Vec<Occurrence>, InvalidValue> {
+        let last = now.tokyo_date()?;
+        if self.pauses.iter().any(|pause| pause.contains(last)) {
+            return Ok(vec![]);
+        }
         let earliest = UtcInstant(now.0.saturating_sub(900_000));
         let first = earliest.tokyo_date()?;
-        let last = now.tokyo_date()?;
         let mut candidates = self.on_date(first);
         if first != last {
             candidates.extend(self.on_date(last));
@@ -649,5 +683,90 @@ mod tests {
         assert_eq!(next.local_date, "2026-10-02");
         // 2026-10-01 15:00:00 UTC, independently fixed Unix milliseconds.
         assert_eq!(next.timestamp.as_millis(), 1_790_866_800_000);
+    }
+
+    #[test]
+    fn pause_start_blocks_previous_days_delayed_notification() {
+        let mut m = medication(Recurrence::Daily, "2026-10-01", None);
+        m.slots[0].time = "23:59".parse().unwrap();
+        m.pauses
+            .push(PausePeriod::new(date("2026-10-03"), date("2026-10-05")).unwrap());
+        assert_eq!(m.due(at("2026-10-02", "23:59")).unwrap().len(), 1);
+        assert_eq!(m.due(at("2026-10-03", "00:00")).unwrap().len(), 0);
+        assert_eq!(m.due(at("2026-10-03", "00:14")).unwrap().len(), 0);
+        assert_eq!(m.due(at("2026-10-06", "00:00")).unwrap().len(), 0);
+        assert_eq!(m.due(at("2026-10-06", "23:59")).unwrap().len(), 1);
+        m.pauses.clear();
+        assert_eq!(m.due(at("2026-10-03", "00:00")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn next_skips_long_intervals_and_pauses_without_moving_the_anchor() {
+        let m = medication(
+            Recurrence::Every(NonZeroU32::new(u32::MAX).unwrap()),
+            "2026-10-01",
+            None,
+        );
+        assert_eq!(
+            m.next(at("2026-10-01", "08:01")).unwrap(),
+            NextDose::NoUpcoming
+        );
+        let mut m = medication(
+            Recurrence::Every(NonZeroU32::new(2).unwrap()),
+            "2026-10-01",
+            None,
+        );
+        // Deliberately unsorted adjacent pauses must both be skipped.
+        m.pauses = vec![
+            PausePeriod::new(date("9999-12-28"), date("9999-12-29")).unwrap(),
+            PausePeriod::new(date("2026-10-02"), date("9999-12-27")).unwrap(),
+        ];
+        assert!(
+            matches!(m.next(at("2026-10-01", "08:01")).unwrap(), NextDose::At(o) if o.date == date("9999-12-30"))
+        );
+        m.pauses
+            .push(PausePeriod::new(date("9999-12-30"), date("9999-12-31")).unwrap());
+        assert_eq!(
+            m.next(at("2026-10-01", "08:01")).unwrap(),
+            NextDose::NoUpcoming
+        );
+    }
+
+    #[test]
+    fn optimized_next_matches_bounded_day_by_day_reference() {
+        let recurrences = [
+            Recurrence::Daily,
+            Recurrence::Weekdays(Weekdays::new(1 | 8 | 64).unwrap()),
+            Recurrence::Every(NonZeroU32::new(3).unwrap()),
+        ];
+        for recurrence in recurrences {
+            let mut m = medication(recurrence, "2024-02-20", Some("2024-03-10"));
+            m.pauses = vec![PausePeriod::new(date("2024-02-27"), date("2024-03-02")).unwrap()];
+            let mut day = date("2024-02-19");
+            while day <= date("2024-03-11") {
+                for time in ["00:00", "08:00", "08:01"] {
+                    let now = day.at(time.parse().unwrap());
+                    let mut scan = day.max(m.schedule.start);
+                    let mut expected = NextDose::NoUpcoming;
+                    if scan > m.schedule.end.unwrap() {
+                        expected = NextDose::Ended;
+                    } else {
+                        while scan <= m.schedule.end.unwrap() {
+                            if let Some(o) = m
+                                .on_date(scan)
+                                .into_iter()
+                                .find(|o| o.at >= now && o.at >= m.saved_at)
+                            {
+                                expected = NextDose::At(o);
+                                break;
+                            }
+                            scan = scan.next().unwrap();
+                        }
+                    }
+                    assert_eq!(m.next(now).unwrap(), expected);
+                }
+                day = day.next().unwrap();
+            }
+        }
     }
 }
