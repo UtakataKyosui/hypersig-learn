@@ -47,6 +47,12 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      - name: Require the D1 database id
+        run: |
+          if ! sed -En '/^database_id = "[^"]+"/p' wrangler.toml | read -r _; then
+            echo "database_id in wrangler.toml is missing: deploy once by hand and commit it" >&2
+            exit 1
+          fi
       - name: Require the VAPID public key
         run: |
           if ! sed -En '/^VAPID_PUBLIC_KEY = "[^"]+"/p' wrangler.toml | read -r _; then
@@ -73,4 +79,9 @@ jobs:
       - name: Smoke test
         env:
           URL: ${{ steps.deploy.outputs.deployment-url }}
-        run: curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors "$URL/manifest.webmanifest" > /dev/null
+        run: |
+          if [ -z "$URL" ]; then
+            echo "wrangler-action returned no deployment-url" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors "$URL/manifest.webmanifest" > /dev/null

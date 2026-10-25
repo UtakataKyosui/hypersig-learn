@@ -96,12 +96,13 @@ case "$mode" in
         echo "VAPID_SUBJECT updated."
         ;;
     setup)
-        printf '%s' "$subject" | npx wrangler secret put VAPID_SUBJECT > /dev/null
-        printf '%s' "$private" | npx wrangler secret put VAPID_PRIVATE_KEY > /dev/null
+        # Files first, so that a failed `secret put` can be run again.
         sed "s|^VAPID_PUBLIC_KEY = \".*\"|VAPID_PUBLIC_KEY = \"$public\"|" wrangler.toml > wrangler.toml.tmp
         mv wrangler.toml.tmp wrangler.toml
         set_dev_var VAPID_PRIVATE_KEY "$private"
         set_dev_var VAPID_SUBJECT "$subject"
+        printf '%s' "$subject" | npx wrangler secret put VAPID_SUBJECT > /dev/null
+        printf '%s' "$private" | npx wrangler secret put VAPID_PRIVATE_KEY > /dev/null
         echo "VAPID_PRIVATE_KEY and VAPID_SUBJECT stored."
         echo "VAPID_PUBLIC_KEY written to wrangler.toml: commit it."
         ;;

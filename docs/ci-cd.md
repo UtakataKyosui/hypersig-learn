@@ -14,7 +14,7 @@
 
 ## 初回セットアップ
 
-1. 手元で `npx wrangler deploy` を一度実行する。D1 が作られて `wrangler.toml` に `database_id` が書かれるので、コミットする。Worker が無いと `wrangler secret` が失敗する。
+1. 手元で `npx wrangler deploy` を一度実行する。D1 が作られて `wrangler.toml` に `database_id` が書かれるので、コミットする。Worker が無いと `wrangler secret` が失敗する。手順 2 までの間は VAPID の secret が無く、毎分の Cron がエラーになるので、続けて手順 2 を行う。
 2. `scripts/setup-vapid.sh` を実行し、連絡先のメールアドレスを入力する。VAPID 鍵対を作り、次を行う。
    - `VAPID_PRIVATE_KEY` と `VAPID_SUBJECT`（`mailto:` 付き）を Worker secret に登録する
    - 公開鍵を `wrangler.toml` の `VAPID_PUBLIC_KEY` に書く。コミットする
@@ -24,4 +24,4 @@
 
 `VAPID_PRIVATE_KEY` が登録済みのとき、`setup-vapid.sh` は中断する。鍵を変えると既存の Push 購読がすべて無効になるため。連絡先だけ変えるときは `scripts/setup-vapid.sh --subject-only` を使う。`--dry-run` は鍵の形式だけを確かめ、何も変更しない。
 
-`deploy` ジョブは `wrangler.toml` の `VAPID_PUBLIC_KEY` が空のとき、または Worker に `VAPID_PRIVATE_KEY` と `VAPID_SUBJECT` が無いときに失敗する。
+`deploy` ジョブは `wrangler.toml` に `database_id` が無いとき、`VAPID_PUBLIC_KEY` が空のとき、または Worker に `VAPID_PRIVATE_KEY` と `VAPID_SUBJECT` が無いときに失敗する。

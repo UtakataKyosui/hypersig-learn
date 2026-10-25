@@ -38,7 +38,7 @@ Push サービス → SW(push) → showNotification → クリックで /notific
 | Web Push 暗号化・VAPID・送信 | `src/push.rs` |
 | 設定画面・購読保存 Action・scheduled 処理 | `src/notifications.rs` |
 | Service Worker／購読 custom element／アイコン | `assets/` |
-| Cron・VAPID 設定 | `wrangler.toml` |
+| Cron・VAPID 設定 | `wrangler.toml`（公開鍵）、Worker secret（秘密鍵・連絡先）、`scripts/setup-vapid.sh` |
 
 ### 0.4.1 固有の不足と回避
 
