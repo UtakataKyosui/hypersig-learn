@@ -4,12 +4,14 @@
 #   scripts/setup-vapid.sh [--dry-run] [EMAIL]
 #   scripts/setup-vapid.sh --subject-only [EMAIL]
 #
-# Generates a P-256 key pair, stores the private key and the contact address
-# as the Worker secrets VAPID_PRIVATE_KEY and VAPID_SUBJECT, writes the public
-# key to wrangler.toml, and writes both secrets to .dev.vars for `wrangler dev`.
-# It refuses to run when VAPID_PRIVATE_KEY already exists, because a new key
-# invalidates every push subscription. --subject-only changes the address
-# alone. --dry-run generates a key and prints both halves, touching nothing.
+# Generates a P-256 key pair and stores the public key, the private key, and
+# the contact address as the GitHub secrets VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY,
+# and VAPID_SUBJECT, which the deploy workflow binds to the worker. It also
+# writes them to .dev.vars for `wrangler dev`. GitHub secrets cannot be read
+# back, so keep a copy of the private key somewhere safe. It refuses to run when
+# VAPID_PRIVATE_KEY already exists, because a new key invalidates every push
+# subscription. --subject-only changes the address alone. --dry-run generates a
+# key and prints both halves, touching nothing.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -53,25 +55,30 @@ set_dev_var() {
     mv .dev.vars.tmp .dev.vars
 }
 
+set_secret() {
+    printf '%s' "$2" | gh secret set "$1" > /dev/null
+}
+
 if [ "$mode" != dry-run ]; then
-    secrets=$(npx wrangler secret list --format json) || {
-        echo "could not list secrets: deploy the worker once with 'npx wrangler deploy' first" >&2
+    secrets=$(gh secret list) || {
+        echo "could not list GitHub secrets: run 'gh auth login' and check the repository" >&2
         exit 1
     }
     has_key=false
-    case "$secrets" in *'"VAPID_PRIVATE_KEY"'*) has_key=true ;; esac
+    case "$secrets" in VAPID_PRIVATE_KEY* | *"
+VAPID_PRIVATE_KEY"*) has_key=true ;; esac
     if [ "$mode" = setup ] && [ "$has_key" = true ]; then
         echo "VAPID_PRIVATE_KEY already exists; a new key would invalidate every subscription." >&2
         echo "Use --subject-only to change the contact address." >&2
         exit 1
     fi
-    if [ "$mode" = subject-only ] && [ "$has_key" = false ]; then
+    if [ "$mode" = 'subject-only' ] && [ "$has_key" = false ]; then
         echo "VAPID_PRIVATE_KEY does not exist yet; run without --subject-only." >&2
         exit 1
     fi
 fi
 
-if [ "$mode" != subject-only ]; then
+if [ "$mode" != 'subject-only' ]; then
     # A SEC1 ECPrivateKey in DER: the 32-byte private scalar starts at byte 8
     # and the 65-byte uncompressed public point is the last 65 bytes.
     der=$(mktemp)
@@ -91,19 +98,20 @@ case "$mode" in
         printf 'private %s\n' "$private"
         ;;
     subject-only)
-        printf '%s' "$subject" | npx wrangler secret put VAPID_SUBJECT > /dev/null
         set_dev_var VAPID_SUBJECT "$subject"
-        echo "VAPID_SUBJECT updated."
+        set_secret VAPID_SUBJECT "$subject"
+        echo "VAPID_SUBJECT updated. It reaches the worker on the next deploy."
         ;;
     setup)
-        # Files first, so that a failed `secret put` can be run again.
-        sed "s|^VAPID_PUBLIC_KEY = \".*\"|VAPID_PUBLIC_KEY = \"$public\"|" wrangler.toml > wrangler.toml.tmp
-        mv wrangler.toml.tmp wrangler.toml
+        # The private key goes last: its presence marks a finished setup, so
+        # an interrupted run can be run again.
+        set_dev_var VAPID_PUBLIC_KEY "$public"
         set_dev_var VAPID_PRIVATE_KEY "$private"
         set_dev_var VAPID_SUBJECT "$subject"
-        printf '%s' "$subject" | npx wrangler secret put VAPID_SUBJECT > /dev/null
-        printf '%s' "$private" | npx wrangler secret put VAPID_PRIVATE_KEY > /dev/null
-        echo "VAPID_PRIVATE_KEY and VAPID_SUBJECT stored."
-        echo "VAPID_PUBLIC_KEY written to wrangler.toml: commit it."
+        set_secret VAPID_PUBLIC_KEY "$public"
+        set_secret VAPID_SUBJECT "$subject"
+        set_secret VAPID_PRIVATE_KEY "$private"
+        echo "VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT stored."
+        echo "They reach the worker on the next deploy."
         ;;
 esac

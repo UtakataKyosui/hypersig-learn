@@ -53,29 +53,32 @@ jobs:
             echo "database_id in wrangler.toml is missing: deploy once by hand and commit it" >&2
             exit 1
           fi
-      - name: Require the VAPID public key
-        run: |
-          if ! sed -En '/^VAPID_PUBLIC_KEY = "[^"]+"/p' wrangler.toml | read -r _; then
-            echo "VAPID_PUBLIC_KEY in wrangler.toml is empty: run scripts/setup-vapid.sh" >&2
-            exit 1
-          fi
-      - name: Require the VAPID secrets
+      - name: Require the VAPID settings
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
         run: |
-          secrets=$(npx wrangler secret list --format json)
-          for name in VAPID_PRIVATE_KEY VAPID_SUBJECT; do
-            case "$secrets" in
-              *"\"$name\""*) ;;
-              *) echo "Worker secret $name is missing: run scripts/setup-vapid.sh" >&2; exit 1 ;;
-            esac
+          for name in VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT; do
+            if [ -z "$(printenv "$name")" ]; then
+              echo "GitHub secret $name is missing: run scripts/setup-vapid.sh" >&2
+              exit 1
+            fi
           done
       - id: deploy
         uses: cloudflare/wrangler-action@v3
+        env:
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          vars: |
+            VAPID_PUBLIC_KEY
+          secrets: |
+            VAPID_PRIVATE_KEY
+            VAPID_SUBJECT
       - name: Smoke test
         env:
           URL: ${{ steps.deploy.outputs.deployment-url }}

@@ -26,11 +26,9 @@ class_name = "Hub"
 type = "durable-object"
 storage = "sqlite"
 
-# The VAPID public key is not secret. `scripts/setup-vapid.sh` writes it here
-# and stores the private key and the contact address as the secrets
-# `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`, which never belong in this file.
-[vars]
-VAPID_PUBLIC_KEY = ""
+# The VAPID public key, private key, and contact address are GitHub secrets
+# that the deploy workflow binds to the worker. `scripts/setup-vapid.sh`
+# creates them, and `.dev.vars` holds them for `wrangler dev`.
 
 # Every minute, UTC.
 [triggers]
