@@ -4,7 +4,7 @@
 
 1. `.dev.vars` に `AUTH_SECRET`（暗号学的乱数32バイト以上を符号化した文字列）、`AUTH_PASSWORD`（本人だけが知る十分に長いパスワード）を設定する。値はコミットしない。
 2. `npx wrangler d1 migrations apply app --local` を実行する。再実行は適用済み migration をスキップする。既存 counter / push_probe テーブルと値は保持する。
-3. `npx wrangler dev` で起動し、`/login` を開く。Cookie は `__Host-medication`、有効期限24時間、HttpOnly / Secure / SameSite=Lax / Path=/。localhost の安全なコンテキスト、または HTTPS で利用する。
+3. `npx wrangler dev` で起動し、`/login` を開く。Cookie は `__Host-medication`、有効期限24時間、HttpOnly / Secure / SameSite=Lax / Path=/。本番は HTTPS で利用する。HTTP localhost での Cookie 保持は Arc で確認したが、Safari では保持されず再びログインへ戻った。Safari の開発確認には信頼済み証明書の HTTPS 環境が必要。
 
 本番への適用は既存の main デプロイ CI が担当する。merge 前に GitHub Secrets `AUTH_SECRET` と `AUTH_PASSWORD` を利用者が登録する。CI は秘密の存在と署名鍵の最小長を確認してから migration、Worker の順で適用する。この PR の作成時には本番 migration、secret 登録、デプロイを行っていない。
 
@@ -37,6 +37,8 @@ SUBSCRIPTION_STATUS は本人の endpoint に対する有効状態だけを返�
 - 一時ローカル D1 への migration 適用・再適用を Wrangler 4.152.0 で確認。
 - ローカル Worker HTTP でログイン、Cookie 属性、CRUD再読込、競合、別薬の枠奪取拒否、400/401/403/415、購読再登録・解除を確認。
 - `scripts/test-worker.py` は localhost:8791 の使い捨て環境専用。AUTH_PASSWORD=`local-test-password`、AUTH_SECRET=検証用32文字以上を設定して起動し、同じローカル D1 に migration を適用してから実行する。実在しない購読を保存するが、通知送信は行わない。ログアウト、改ざん Cookie 拒否、公開 manifest も含む25項目を実行した。
-- ブラウザ接続を利用できなかったためログイン binding の実操作は未検証。実際の端末 Push と本番 Cron、実際の複数 isolate での試験も未実施。Rust の Router テストと HTTP リクエストごとに新規作成される AppState、SQLite の別接続を使って境界を検証した。
+- ネイティブブラウザの UI 操作で確認：Safari で未認証ページからログインへ移動、パスワード入力 binding と不正入力時の401表示。Arc で正しい入力からログインに成功し、服薬設定ページの表示と再読込後の認証保持を確認。テスト用パスワードはブラウザに保存していない。
+- 購読失効についても SQL テストで、古い鍵への遅延した失効応答が差し替え済みの購読を無効にしないことと、現在の鍵に対する失効が配信取消まで反映されることを確認。
+- 実際の端末 Push と本番 Cron、実際の複数 isolate での試験は後続工程として未実施。Rust の Router テストと HTTP リクエストごとに新規作成される AppState、SQLite の別接続を使って永続性の境界を検証した。
 
 設計根拠: [D1 batch の原子性](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)、[D1 migrations](https://developers.cloudflare.com/d1/reference/migrations/)。hypersig / worker API は Cargo.lock の 0.4.1 / 0.8.7 のローカルソースで照合。

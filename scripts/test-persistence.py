@@ -106,6 +106,28 @@ class Persistence(unittest.TestCase):
         for table in ["medications", "schedules", "dose_slots", "pause_periods", "notification_jobs", "notification_deliveries"]:
             self.assertEqual(self.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0], 0)
 
+    def test_expiry_ignores_replaced_keys_and_cancels_current_subscription(self):
+        self.seed_job()
+        endpoint = "https://fcm.googleapis.com/a"
+        with self.db:
+            self.db.execute(sql("INSERT INTO push_probe"), (endpoint, "new-key", "new-auth"))
+            self.db.execute(sql("INSERT INTO push_subscriptions"),
+                            ("sub", "owner", endpoint, "new-key", "new-auth", 2000))
+            # A late 410 response for old keys must not expire a replacement.
+            for prefix in ["UPDATE push_subscriptions SET enabled=0 WHERE endpoint", "DELETE FROM push_probe"]:
+                self.db.execute(sql(prefix), (endpoint, "key", "auth"))
+            self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone()[0], 1)
+            self.assertEqual(self.db.execute("SELECT count(*) FROM push_probe").fetchone()[0], 1)
+            for prefix in ["UPDATE push_subscriptions SET enabled=0 WHERE endpoint", "DELETE FROM push_probe"]:
+                self.db.execute(sql(prefix), (endpoint, "new-key", "new-auth"))
+        other = self.connect()
+        try:
+            self.assertEqual(other.execute("SELECT enabled FROM push_subscriptions").fetchone()[0], 0)
+            self.assertEqual(other.execute("SELECT count(*) FROM push_probe").fetchone()[0], 0)
+            self.assertEqual(other.execute("SELECT state FROM notification_deliveries").fetchone()[0], "cancelled")
+        finally:
+            other.close()
+
 
 if __name__ == "__main__":
     unittest.main()
