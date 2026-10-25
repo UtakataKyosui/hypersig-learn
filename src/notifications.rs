@@ -294,10 +294,15 @@ fn probe_section(
         )
         .child(
             button(ButtonVariant::Default, ButtonSize::Lg)
+                .class(Class::new("med-cta"))
                 .on_click(SCHEDULE_PROBE.call().error(problem))
                 .text("テスト通知を予約"),
         )
-        .child(p().class(Class::new("med-muted")).bind_text(probe))
+        .child(
+            p().class(Class::new("med-muted"))
+                .show(!probe.is_empty())
+                .bind_text(probe),
+        )
         .child(
             p().class(Class::new("med-note"))
                 .text("時刻は Asia/Tokyo（日本時間）で固定です。"),

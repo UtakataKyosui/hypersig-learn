@@ -89,6 +89,10 @@ pub const STYLE: Stylesheet = Stylesheet::new(
 .med-preview-text span { font-size: .75rem; color: var(--muted-foreground); }
 .med-shell input:not([type='checkbox']):not([type='radio']), .med-shell select { min-height: 3rem; border-radius: .75rem; background: #fff; }
 .med-shell form button[type='submit'], .med-cta { width: 100%; min-height: 3.25rem; border-radius: .875rem; font-weight: 700; }
+push-subscribe { display: block; }
+push-subscribe button { width: 100%; min-height: 3.25rem; border: 0; border-radius: .875rem; background: #246B52; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+push-subscribe button:disabled { opacity: .6; cursor: default; }
+.med-item-text > .med-pill { justify-self: start; }
 .med-cta { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .med-tabs { position: fixed; inset: auto 0 0 0; z-index: 20; display: flex; justify-content: center; background: #fff; border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
 .med-tabs-inner { display: grid; grid-template-columns: repeat(3, 1fr); gap: .25rem; width: 100%; max-width: 30rem; padding: .5rem 1.5rem; }
