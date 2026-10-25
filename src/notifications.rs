@@ -137,13 +137,13 @@ fn now_ms() -> u64 {
 
 pub async fn settings_page(
     state: AppState,
-    member: crate::auth::Member,
+    _: crate::auth::Member,
     (): (),
 ) -> Page<NotificationSettings> {
-    settings_view(&state.vapid_public, member.owner())
+    settings_view(&state.vapid_public)
 }
 
-fn settings_view(vapid_public: &str, owner: &str) -> Page<NotificationSettings> {
+fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
     let permission = NotificationSettings::permission();
     let saved = NotificationSettings::saved();
     let probe = NotificationSettings::probe();
@@ -216,8 +216,7 @@ fn settings_view(vapid_public: &str, owner: &str) -> Page<NotificationSettings> 
                                         .child(alert_description().bind_text(problem)),
                                 ),
                         ),
-                )
-                .child(p().text(format!("利用者 ID: {owner}"))),
+                ),
         )
 }
 
@@ -426,11 +425,11 @@ mod tests {
 
     #[test]
     fn page_renders_the_typed_wiring_and_hides_nothing_when_unsaved() {
-        let html = settings_view("BKey", "user-id-1").render();
+        let html = settings_view("BKey").render();
         assert!(html.contains("push-subscribe"));
         assert!(html.contains(assets::SUBSCRIBE_SCRIPT));
         assert!(html.contains("data-hs-on-custom"));
         assert!(html.contains("/notifications/subscription"));
-        assert!(html.contains("利用者 ID: user-id-1"));
+        assert!(!html.contains("利用者 ID"));
     }
 }

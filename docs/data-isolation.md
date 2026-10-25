@@ -21,7 +21,7 @@
 #4 までのデータは `owner = 'owner'` で保存されている。最初にログインした利用者へ自動で割り当てることはしない。移行先は利用者が明示する。
 
 1. 移行先の人が Google でログインして、`users` に行を作る。
-2. その人が通知設定ページ（`/notifications`）の下部に表示される「利用者 ID」を控える。ID は本人のセッションからだけ得られるので、他の人の ID と取り違えない。
+2. `scripts/legacy-owner.sh users --remote` で利用者の ID・作成時刻（UTC）・状態・所有する服薬数を表示し、移行先の行を選ぶ。ID はアプリの画面には表示しない。作成時刻が近い利用者が複数いるときは、移行先の人にログイン時刻を確認して取り違えを避ける。
 3. `npx wrangler d1 export app --remote --output backup.sql` でバックアップする。
 4. `scripts/legacy-owner.sh status <USER_ID> --remote` で件数を確認し、`migrate` で引き継ぐ。
 5. 切り戻しは `scripts/legacy-owner.sh rollback <USER_ID> --remote`。

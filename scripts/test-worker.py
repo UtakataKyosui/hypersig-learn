@@ -110,7 +110,7 @@ assert not auth_fixture.query(PERSIST, f"SELECT 1 FROM oauth_flows WHERE state='
 assert re.search(r'<a [^>]*href="/auth/google"', login_html), login_html
 page('/medications', 200, cookie_a)
 (_, notifications_html) = page('/notifications', 200, cookie_a)
-assert f'利用者 ID: {user_a}' in notifications_html and user_b not in notifications_html
+assert user_a not in notifications_html and user_b not in notifications_html and '利用者 ID' not in notifications_html
 # Touching a signed-in session on a sign-in route cannot move its deadline.
 def deadline(cookie):
     import base64, hashlib
