@@ -8,13 +8,22 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+aes-gcm = "0.10"
 # Without its default features, which need tokio's networking, so that axum
 # builds for wasm32-unknown-unknown.
 axum = { version = "0.8", default-features = false }
+base64 = "0.22"
 futures = "0.3"
+getrandom = { version = "0.2", features = ["js"] }
+hkdf = "0.12"
 hypersig = "0.4.1"
 hypersig_ui = "0.4.1"
+js-sys = "0.3.106"
+p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 tower-service = "0.3"
 # `#[durable_object]` expands to wasm-bindgen's macros, whose expansion names
 # the `wasm_bindgen` crate by that path.
