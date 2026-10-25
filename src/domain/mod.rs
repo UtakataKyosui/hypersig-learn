@@ -560,4 +560,94 @@ mod tests {
         );
         assert_eq!(view.today[0].local_date, "2026-10-01");
     }
+
+    #[test]
+    fn pause_suppresses_every_slot_through_the_last_minute() {
+        let mut m = medication(Recurrence::Daily, "2026-10-01", None);
+        m.slots[0].time = "00:00".parse().unwrap();
+        let mut late = m.slots[0].clone();
+        late.id = "late".parse().unwrap();
+        late.time = "23:59".parse().unwrap();
+        m.slots.push(late);
+        m.pauses
+            .push(PausePeriod::new(date("2026-10-03"), date("2026-10-05")).unwrap());
+        assert_eq!(m.due(at("2026-10-02", "23:59")).unwrap().len(), 1);
+        for day in ["2026-10-03", "2026-10-05"] {
+            assert_eq!(m.on_date(date(day)).len(), 0);
+            assert_eq!(m.due(at(day, "00:15")).unwrap().len(), 0);
+            assert_eq!(m.due(at(day, "23:59")).unwrap().len(), 0);
+        }
+        assert_eq!(
+            m.due(at("2026-10-06", "00:00")).unwrap()[0]
+                .slot_id
+                .to_string(),
+            "slot"
+        );
+        assert!(
+            matches!(m.next(at("2026-10-03", "00:00")).unwrap(), NextDose::At(o) if o.at == at("2026-10-06", "00:00"))
+        );
+    }
+
+    #[test]
+    fn weekdays_resume_on_the_next_selected_day_and_respect_end() {
+        let mut m = medication(
+            Recurrence::Weekdays(Weekdays::new(1).unwrap()),
+            "2026-10-01",
+            Some("2026-10-12"),
+        );
+        m.pauses
+            .push(PausePeriod::new(date("2026-10-05"), date("2026-10-06")).unwrap());
+        assert!(
+            matches!(m.next(at("2026-10-04", "00:00")).unwrap(), NextDose::At(o) if o.at == at("2026-10-12", "08:00"))
+        );
+        assert_eq!(m.on_date(date("2026-09-28")).len(), 0);
+        assert_eq!(m.due(at("2026-10-12", "08:00")).unwrap().len(), 1);
+        assert_eq!(m.on_date(date("2026-10-19")).len(), 0);
+    }
+
+    #[test]
+    fn save_and_delivery_boundaries_are_inclusive_without_future_candidates() {
+        let mut m = medication(Recurrence::Daily, "2026-10-01", None);
+        m.saved_at = at("2026-10-01", "08:00");
+        assert_eq!(m.due(UtcInstant(m.saved_at.0 - 1)).unwrap().len(), 0);
+        assert_eq!(m.due(m.saved_at).unwrap().len(), 1);
+        assert!(matches!(m.next(m.saved_at).unwrap(), NextDose::At(o) if o.at == m.saved_at));
+        m.slots.clear();
+        assert_eq!(m.next(m.saved_at).unwrap(), NextDose::NoUpcoming);
+        for clock in [UtcInstant(i64::MIN), UtcInstant(i64::MAX)] {
+            assert!(clock.tokyo_date().is_err());
+            assert!(m.due(clock).is_err());
+        }
+    }
+
+    #[test]
+    fn date_round_trips_cover_a_complete_gregorian_cycle() {
+        let mut day = date("2000-01-01");
+        for _ in 0..146_097 {
+            assert_eq!(day.to_string().parse(), Ok(day));
+            assert_eq!(day.at("00:00".parse().unwrap()).tokyo_date(), Ok(day));
+            day = day.next().unwrap();
+        }
+        assert_eq!(day.to_string(), "2400-01-01");
+    }
+
+    #[test]
+    fn view_preserves_large_ids_and_next_day_utc_milliseconds() {
+        let mut m = medication(Recurrence::Daily, "2026-10-01", None);
+        m.slots[0].id = "9007199254740993".parse().unwrap();
+        m.slots[0].time = "00:00".parse().unwrap();
+        let view = crate::schedule_view::query(
+            &m,
+            hypersig::Timestamp::from_millis(at("2026-10-01", "23:59").0),
+        )
+        .unwrap();
+        assert_eq!(view.today[0].slot_id, "9007199254740993");
+        let crate::schedule_view::NextPlannedDose::At(next) = view.next else {
+            panic!("expected next dose")
+        };
+        assert_eq!(next.slot_id, "9007199254740993");
+        assert_eq!(next.local_date, "2026-10-02");
+        // 2026-10-01 15:00:00 UTC, independently fixed Unix milliseconds.
+        assert_eq!(next.timestamp.as_millis(), 1_790_866_800_000);
+    }
 }

@@ -303,4 +303,66 @@ mod tests {
         };
         assert!(adjacent.parse(&[existing]).is_ok());
     }
+
+    #[test]
+    fn dose_field_errors_and_unicode_length_limits() {
+        let mut input = DoseSlotInput {
+            time: "23:59".into(),
+            amount: "1000".into(),
+            unit: "単".repeat(20),
+            timing: "other".into(),
+            note: "💊".repeat(200),
+        };
+        assert!(input.parse("slot".parse().unwrap()).is_ok());
+        input.unit.push('位');
+        assert!(
+            Form::validate(&input)
+                .unwrap_err()
+                .message(DoseSlotInput::unit())
+                .is_some()
+        );
+        input.unit = "錠".into();
+        input.note.push('💊');
+        assert!(
+            Form::validate(&input)
+                .unwrap_err()
+                .message(DoseSlotInput::note())
+                .is_some()
+        );
+        input.note.clear();
+        input.time = "24:00".into();
+        assert!(
+            input
+                .parse("slot".parse().unwrap())
+                .unwrap_err()
+                .message(DoseSlotInput::time())
+                .is_some()
+        );
+        input.time = "08:00".into();
+        input.timing = "unknown".into();
+        assert!(
+            input
+                .parse("slot".parse().unwrap())
+                .unwrap_err()
+                .message(DoseSlotInput::timing())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn pause_invalid_dates_reversed_ranges_and_empty_fields() {
+        for (start, end, field) in [
+            ("", "2026-10-01", PauseInput::start()),
+            ("2026-02-29", "2026-10-01", PauseInput::start()),
+            ("2026-10-01", "", PauseInput::end()),
+            ("2026-10-01", "2026-13-01", PauseInput::end()),
+            ("2026-10-02", "2026-10-01", PauseInput::end()),
+        ] {
+            let input = PauseInput {
+                start: start.into(),
+                end: end.into(),
+            };
+            assert!(input.parse(&[]).unwrap_err().message(field).is_some());
+        }
+    }
 }
