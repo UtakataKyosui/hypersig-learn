@@ -48,6 +48,35 @@ sequenceDiagram
 | `GOOGLE_CLIENT_SECRET` | GitHub Secret（Worker の secret にする） | `.dev.vars` | secret |
 | `GOOGLE_REDIRECT_URL` | GitHub Secret（var）。`https://…/auth/google/callback` | `.dev.vars`（`http://localhost:8787/auth/google/callback` を許す） | var |
 
+### 登録手順
+
+登録先は GitHub Secrets だけでよい。Cloudflare 側の値は、main へのデプロイ時に `cloudflare/wrangler-action` が GitHub Secrets から Worker へ渡す（`GOOGLE_CLIENT_ID`・`GOOGLE_REDIRECT_URL` は var、`GOOGLE_CLIENT_SECRET` は secret）。Cloudflare のダッシュボードや `wrangler secret put` で同じ名前を手で作る必要はない。`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`・`D1_DATABASE_ID` は既存のものを使う。
+
+```sh
+# リポジトリで gh auth login 済みであること。--body に値を書く2つは秘密ではない。
+gh secret set GOOGLE_CLIENT_ID --body 'xxxx.apps.googleusercontent.com'
+gh secret set GOOGLE_REDIRECT_URL --body 'https://<本番ホスト>/auth/google/callback'
+# シークレットはシェルの履歴に残さないよう、引数でなく対話入力（貼り付けて Enter、Ctrl+D）で渡す。
+gh secret set GOOGLE_CLIENT_SECRET
+gh secret list   # 3つの名前が並ぶことを確認する（値は読み戻せない）
+```
+
+GitHub の画面なら、リポジトリの Settings → Secrets and variables → Actions → New repository secret で同じ3つを登録する。`<本番ホスト>` は Worker の公開ホスト名で、Google Cloud に登録した承認済みリダイレクト URI と一字一句一致させる。
+
+ローカル（`wrangler dev`）は、`.dev.vars`（gitignore 済み）に書く。
+
+```
+GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=…
+GOOGLE_REDIRECT_URL=http://localhost:8787/auth/google/callback
+```
+
+ローカル用のリダイレクト URI も Google Cloud に登録しておく。Safari は HTTP の localhost で Secure Cookie を保持しないため、Safari で確認するときは信頼済み証明書の HTTPS 環境を使う。
+
+Cloudflare へ手動で入れる場合（通常は不要）は、`npx wrangler secret put GOOGLE_CLIENT_SECRET`。var 2つは `wrangler.toml` に書かず、デプロイ時の `--var` で渡す運用に合わせる。
+
+登録後の確認: ① main へ merge（または CI の `deploy` ジョブ）が「Require notification and authentication settings」を通る。② デプロイ後に `/login` が表示され、リンクから Google の画面へ移る。未設定のままだと Worker は全リクエストに503を返す。値を変えたときは再デプロイが必要。旧 `AUTH_SECRET`・`AUTH_PASSWORD` は `gh secret delete AUTH_SECRET`／`gh secret delete AUTH_PASSWORD` で削除でき、Worker 側の同名 secret は `npx wrangler secret delete AUTH_SECRET`／`AUTH_PASSWORD` で消せる。
+
 どれかが未設定、またはリダイレクト URL が `https://`（ローカルは `http://localhost`）以外の場合、Worker は全リクエストに503を返す。デプロイは3つの値の存在と URL の形式を確認してから進む。旧 `AUTH_SECRET`・`AUTH_PASSWORD` は不要になったので、GitHub Secrets と Worker の secret から削除してよい。
 
 ## ID token の検証（#53）
