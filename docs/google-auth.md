@@ -50,7 +50,7 @@ sequenceDiagram
 
 ### 登録手順
 
-登録先は GitHub Secrets だけでよい。Cloudflare 側の値は、main へのデプロイ時に `cloudflare/wrangler-action` が GitHub Secrets から Worker へ渡す（`GOOGLE_CLIENT_ID`・`GOOGLE_REDIRECT_URL` は var、`GOOGLE_CLIENT_SECRET` は secret）。Cloudflare のダッシュボードや `wrangler secret put` で同じ名前を手で作る必要はない。`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`・`D1_DATABASE_ID` は既存のものを使う。
+登録先は GitHub Secrets だけでよい。Cloudflare 側の値は、main へのデプロイ時に `cf deploy --prebuilt --mode production --no-provision` が GitHub Secrets から Worker へ渡す（`GOOGLE_CLIENT_ID`・`GOOGLE_REDIRECT_URL` は var、`GOOGLE_CLIENT_SECRET` は secret）。Cloudflare のダッシュボードや `wrangler secret put` で同じ名前を手で作る必要はない。`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`・`D1_DATABASE_ID` は既存のものを使う。
 
 ```sh
 # リポジトリで gh auth login 済みであること。--body に値を書く2つは秘密ではない。
@@ -63,7 +63,7 @@ gh secret list   # 3つの名前が並ぶことを確認する（値は読み戻
 
 GitHub の画面なら、リポジトリの Settings → Secrets and variables → Actions → New repository secret で同じ3つを登録する。`<本番ホスト>` は Worker の公開ホスト名で、Google Cloud に登録した承認済みリダイレクト URI と一字一句一致させる。
 
-ローカル（`wrangler dev`）は、`.dev.vars`（gitignore 済み）に書く。
+ローカル（`cf dev`）は、`.dev.vars`（gitignore 済み）に書く。
 
 ```
 GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
@@ -73,9 +73,9 @@ GOOGLE_REDIRECT_URL=http://localhost:8787/auth/google/callback
 
 ローカル用のリダイレクト URI も Google Cloud に登録しておく。Safari は HTTP の localhost で Secure Cookie を保持しないため、Safari で確認するときは信頼済み証明書の HTTPS 環境を使う。
 
-Cloudflare へ手動で入れる場合（通常は不要）は、`npx wrangler secret put GOOGLE_CLIENT_SECRET`。var 2つは `wrangler.toml` に書かず、デプロイ時の `--var` で渡す運用に合わせる。
+Cloudflare へ手動で入れる場合（通常は不要）は、`npx wrangler secret put GOOGLE_CLIENT_SECRET --name app`。通常は GitHub Secrets を更新して CI を実行する。var 2つは `cloudflare.config.ts` がビルド時の環境変数から読む。
 
-登録後の確認: ① main へ merge（または CI の `deploy` ジョブ）が「Require notification and authentication settings」を通る。② デプロイ後に `/login` が表示され、リンクから Google の画面へ移る。未設定のままだと Worker は全リクエストに503を返す。値を変えたときは再デプロイが必要。旧 `AUTH_SECRET`・`AUTH_PASSWORD` は `gh secret delete AUTH_SECRET`／`gh secret delete AUTH_PASSWORD` で削除でき、Worker 側の同名 secret は `npx wrangler secret delete AUTH_SECRET`／`AUTH_PASSWORD` で消せる。
+登録後の確認: ① main へ merge（または CI の `deploy` ジョブ）が「Require notification and authentication settings」を通る。② デプロイ後に `/login` が表示され、リンクから Google の画面へ移る。未設定のままだと Worker は全リクエストに503を返す。値を変えたときは再デプロイが必要。旧 `AUTH_SECRET`・`AUTH_PASSWORD` は `gh secret delete AUTH_SECRET`／`gh secret delete AUTH_PASSWORD` で削除でき、Worker 側の同名 secret は `npx wrangler secret delete AUTH_SECRET --name app`／`npx wrangler secret delete AUTH_PASSWORD --name app` で消せる。
 
 どれかが未設定、またはリダイレクト URL が `https://`（ローカルは `http://localhost`）以外の場合、Worker は全リクエストに503を返す。デプロイは3つの値の存在と URL の形式を確認してから進む。旧 `AUTH_SECRET`・`AUTH_PASSWORD` は不要になったので、GitHub Secrets と Worker の secret から削除してよい。
 
@@ -103,7 +103,7 @@ Cloudflare へ手動で入れる場合（通常は不要）は、`npx wrangler s
 - サーバー側の認証状態（セッション内の `identity`）: 利用者 ID、`session_version`、認証強度（`Google`／`Additional`）、終了時刻 `expires_at`。`tower-sessions` はリクエストごとの設定から有効期限を計算し直して保存するため、24時間の上限は `expires_at` を読み出し時に検証して守る。ログイン用ルートがログイン済みセッションを書き換えるときは、`pin_expiry` で保存される期限も固定する。`Additional` への昇格は `session_state::promote` だけが行い、ブラウザの値では変わらない（Passkey は今回未実装）。
 - すべてのリクエストで `users` を引き、`status = 'active'` かつ `session_version` が一致しなければ未認証として扱う。
 
-運用操作（`wrangler d1 execute app --remote --command "…"`）:
+運用操作（`npx cf d1 raw "$D1_DATABASE_ID" --sql "…"`）:
 
 | 操作 | SQL |
 |---|---|
@@ -120,7 +120,7 @@ Cloudflare へ手動で入れる場合（通常は不要）は、`npx wrangler s
 | `migrations/0003_owner_isolation.sql` | 利用者別の `push_probe`・`counters`、配信の所有者トリガー、移行記録 | `migrations/rollback/0003_owner_isolation_down.sql` |
 | `migrations/0004_flow_limit.sql` | `oauth_flows.client`（接続元のハッシュ）と索引 | `migrations/rollback/0004_flow_limit_down.sql` |
 
-`wrangler d1 migrations apply` は前進のみ。切り戻しファイルは `wrangler d1 execute --file` で手動実行する。0004、0003、0002 の順に実行する（`legacy_owner_migration` が `users` を参照するため）。その前に旧版の Worker に戻しておく（新版の Worker は新テーブルを前提にする）。0001 の既存の服薬・購読データには触れない。単一所有者データの引き継ぎと切り戻しは [data-isolation.md](data-isolation.md)。
+`cf d1 migrations apply` は前進のみ。切り戻しファイルは `npx cf d1 raw "$D1_DATABASE_ID" --sql @migrations/rollback/<FILE>.sql` で手動実行する。0004、0003、0002 の順に実行する（`legacy_owner_migration` が `users` を参照するため）。その前に旧版の Worker に戻しておく（新版の Worker は新テーブルを前提にする）。0001 の既存の服薬・購読データには触れない。単一所有者データの引き継ぎと切り戻しは [data-isolation.md](data-isolation.md)。
 
 デプロイの順序: ① GitHub Secrets を3つ登録 → ② Google Cloud の redirect URI を登録 → ③ merge（CI が migration → Worker の順に適用）→ ④ 移行先の利用者が一度ログイン → ⑤ `scripts/legacy-owner.sh` で既存データを引き継ぐ。④⑤の前でも新規利用者は使えるが、旧データは `owner='owner'` のまま誰からも見えない。
 
@@ -143,7 +143,7 @@ Cloudflare へ手動で入れる場合（通常は不要）は、`npx wrangler s
 | Rust | `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` | OIDC の検証（不正な署名・iss・aud・nonce・azp・期限・アルゴリズム・鍵更新）、固定ホスト制限、セッション状態、`Member`・リダイレクト／401 |
 | wasm | `cargo check --target wasm32-unknown-unknown` | |
 | SQL | `python3 scripts/test-persistence.py` | migration の適用・切り戻し、フローの一度きりの消費、別接続からの重複した初回ログイン（条件付き INSERT と一意制約）、所有者分離、引き継ぎ・切り戻し。並行実行そのものの保証は、D1 が batch を直列に実行することに依る |
-| Worker | `scripts/test-worker.py`（`wrangler dev` に対して） | 実際の workerd 上で、Google の Discovery への到達、ログイン開始の redirect と Cookie 属性、callback の不正入力・再利用、シード済みセッションでの2利用者の分離・失効・ログアウト |
+| Worker | `scripts/test-worker.py`（`cf dev` に対して） | 実際の workerd 上で、Google の Discovery への到達、ログイン開始の redirect と Cookie 属性、callback の不正入力・再利用、シード済みセッションでの2利用者の分離・失効・ログアウト |
 | ビルド | `sh scripts/build.sh` | `worker-build --release` |
 
 `scripts/test-worker.py` は Google アカウントを使わない。`scripts/auth_fixture.py` がローカル D1 に利用者とセッションの行を直接書く。本番コードにテスト用のログイン経路はない。

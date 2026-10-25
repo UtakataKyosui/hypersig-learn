@@ -1,9 +1,8 @@
 """Smoke test a disposable local Worker whose D1 is seeded with two users.
 
-Run it against `wrangler dev --port 8791 --persist-to $PERSIST_DIR` started with
-GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URL set to dummy
-values, after `wrangler d1 migrations apply app --local --persist-to
-$PERSIST_DIR`. No Google account is used: sessions are seeded into the local
+Run `npm run test:worker` to create an isolated cf dev server on port 8791,
+with dummy Google settings and migrations applied to the same PERSIST_DIR.
+No Google account is used: sessions are seeded into the local
 database by `auth_fixture.py`. Never point it at a deployed Worker.
 """
 import json

@@ -20,7 +20,8 @@ else
   while IFS= read -r -d '' path; do
     case "$path" in
       docs/*|README.md|AGENTS.md|LICENSE|LICENSE.*|.github/dependabot.yml) ;;
-      wrangler.toml) deploy=true ;;
+      # Configuration also affects local bindings and the WASM build.
+      cloudflare.config.ts|wrangler.config.ts|package.json|package-lock.json) rust=true; deploy=true ;;
       *) rust=true; deploy=true ;;
     esac
   done < "$changed"

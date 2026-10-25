@@ -1,5 +1,7 @@
 # MVP 0: Web Push／PWA の技術検証と仕様確定
 
+現在の CLI は `cf`。このページの検証表にある Wrangler のコマンドは実施当時の記録。現在の起動・cron 検証は [cf 移行記録](cloudflare-cli-evaluation.md) を参照。
+
 Issue #2（親 #1）の検証結果。`hypersig` / `hypersig_ui` 0.4.1、`worker` 0.8.7 が基準。
 
 ## 検証状況
@@ -118,7 +120,7 @@ Push サービス → SW(push) → showNotification → クリックで /notific
 ### 準備
 
 1. `scripts/setup-vapid.sh` で VAPID 鍵対と連絡先を設定する。公開鍵・秘密鍵・連絡先は GitHub Secrets に入り、デプロイで Worker に渡る（詳細は `docs/ci-cd.md`）。秘密鍵をチャット・Issue・コミットに貼らない。
-2. main に merge し、CI の `deploy` ジョブでデプロイする（`workers.dev` の HTTPS）。手元の `npx wrangler deploy` は `database_id` と `VAPID_PUBLIC_KEY` を渡さず、CI が設定した値を上書きして Worker を壊すため使わない。
+2. main に merge し、CI の `deploy` ジョブでデプロイする（`workers.dev` の HTTPS）。手元でデプロイせず、既存の D1 ID と vars/secrets を揃える CI の `cf deploy --prebuilt --mode production --no-provision` を使う。
 
 ### 手順
 
@@ -127,7 +129,7 @@ Push サービス → SW(push) → showNotification → クリックで /notific
 3. 「1 分後にテスト通知を送る」を押す。
 4. アプリを閉じる（iPhone はマルチタスクから終了）。
 5. 約 1〜2 分後に OS 通知が出ることを確認し、タップして `/notifications` が開くことを確認する。
-6. `npx wrangler tail` で `push probe: Accepted` を確認する。
+6. `npx wrangler tail app` で `push probe: Accepted` を確認する。
 
 ### 結果記録
 

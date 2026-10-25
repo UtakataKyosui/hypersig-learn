@@ -3,8 +3,8 @@
 ## 起動とデプロイ
 
 1. `.dev.vars` に `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REDIRECT_URL` を設定する。値はコミットしない。設定手順は [google-auth.md](google-auth.md)。
-2. `npx wrangler d1 migrations apply app --local` を実行する。再実行は適用済み migration をスキップする。既存 counter / push_probe テーブルと値は保持する。
-3. `npx wrangler dev` で起動し、`/login` を開く。Cookie は `__Host-session`（セッション ID のみ）、HttpOnly / Secure / SameSite=Lax / Path=/。サーバー側の有効期限は24時間。本番は HTTPS で利用する。HTTP localhost での Cookie 保持は Arc で確認したが、Safari では保持されず再びログインへ戻った。Safari の開発確認には信頼済み証明書の HTTPS 環境が必要。
+2. 従来のローカル DB を引き継ぐ場合は、先に [cf 移行記録](cloudflare-cli-evaluation.md) のコピー手順を実行する。`npm run db:migrate:local` を実行する。再実行は適用済み migration をスキップする。既存 counter / push_probe テーブルと値は保持する。
+3. `npm run dev` で起動し、`/login` を開く。Cookie は `__Host-session`（セッション ID のみ）、HttpOnly / Secure / SameSite=Lax / Path=/。サーバー側の有効期限は24時間。本番は HTTPS で利用する。HTTP localhost での Cookie 保持は Arc で確認したが、Safari では保持されず再びログインへ戻った。Safari の開発確認には信頼済み証明書の HTTPS 環境が必要。
 
 本番への適用は既存の main デプロイ CI が担当する。merge 前に GitHub Secrets `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REDIRECT_URL` を利用者が登録する。CI は秘密の存在とリダイレクト URL の形式を確認してから migration、Worker の順で適用する。この PR の作成時には本番 migration、secret 登録、デプロイを行っていない。
 

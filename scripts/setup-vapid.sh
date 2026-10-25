@@ -7,7 +7,7 @@
 # Generates a P-256 key pair and stores the public key, the private key, and
 # the contact address as the GitHub secrets VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY,
 # and VAPID_SUBJECT, which the deploy workflow binds to the worker. It also
-# writes them to .dev.vars for `wrangler dev`. GitHub secrets cannot be read
+# writes them to .dev.vars for `cf dev`. GitHub secrets cannot be read
 # back, so keep a copy of the private key somewhere safe. It refuses to run when
 # VAPID_PRIVATE_KEY already exists, because a new key invalidates every push
 # subscription. --subject-only changes the address alone. --dry-run generates a
