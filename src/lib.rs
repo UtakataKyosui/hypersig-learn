@@ -4,10 +4,10 @@
 //! The page, its actions, and its streams are the same hypersig code an axum
 //! server runs. The worker hands each request to the axum `Router`.
 //!
-//! Run `npx wrangler dev` and open <http://localhost:8787>. The deploy job of
+//! Run `npm run dev` (`cf dev`) and open <http://localhost:8787>. The deploy job of
 //! `.github/workflows/ci.yml` publishes it. Each request may run in a
 //! different isolate, so a value kept in memory does not reach the next request, and the saved
-//! count lives in the D1 database that `wrangler.toml` binds as `DB`. Every
+//! count lives in the D1 database that `cloudflare.config.ts` binds as `DB`. Every
 //! open tab shows the saved count, and a save made through one isolate
 //! reaches the tabs of the others through the `Hub` Durable Object.
 
@@ -441,7 +441,7 @@ async fn fetch(
     Ok(app.call(request).await?)
 }
 
-/// Runs every minute, from the cron trigger in `wrangler.toml`.
+/// Runs every minute, from the cron trigger in `cloudflare.config.ts`.
 #[event(scheduled)]
 async fn scheduled(_event: worker::ScheduledEvent, env: Env, _context: worker::ScheduleContext) {
     if let Ok(db) = env.d1("DB")

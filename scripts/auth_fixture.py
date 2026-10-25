@@ -3,7 +3,7 @@
 The Worker keeps a session as a row keyed by the SHA-256 of the session id,
 holding the `tower-sessions` record as JSON. The same rows are written here
 so a local test can hold a cookie without a Google account. Use it only with
-`wrangler d1 execute --local`; never against a deployed database.
+`cf d1 raw --local`; never against a deployed database.
 """
 import base64
 import datetime
@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+LOCAL_DATABASE_ID = "00000000-0000-4000-8000-000000000001"
 COOKIE = "__Host-session"
 
 
@@ -24,17 +25,18 @@ def _b64(data):
 def execute(persist_dir, sql):
     """Run `sql` against the local D1 kept in `persist_dir`."""
     subprocess.run(
-        ["npx", "--yes", "wrangler@4.152.0", "d1", "execute", "app", "--local", "--persist-to", str(persist_dir), "--command", sql],
+        ["npx", "--no-install", "cf", "d1", "raw", LOCAL_DATABASE_ID, "--local", "--persist-to", str(persist_dir), "--sql", sql],
         cwd=ROOT, check=True, capture_output=True,
     )
 
 
 def query(persist_dir, sql):
     out = subprocess.run(
-        ["npx", "--yes", "wrangler@4.152.0", "d1", "execute", "app", "--local", "--persist-to", str(persist_dir), "--json", "--command", sql],
+        ["npx", "--no-install", "cf", "d1", "raw", LOCAL_DATABASE_ID, "--local", "--persist-to", str(persist_dir), "--sql", sql],
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout
-    return json.loads(out)[0]["results"]
+    result = json.loads(out)[0]["results"]
+    return [dict(zip(result["columns"], row)) for row in result["rows"]]
 
 
 def add_user(persist_dir, user_id, status="active", version=1):

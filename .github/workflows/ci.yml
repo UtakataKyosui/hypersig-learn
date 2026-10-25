@@ -73,8 +73,6 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
-      # The `runner` context is not available in a job-level `env`.
-      - run: echo "PERSIST_DIR=$RUNNER_TEMP/e2e" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -83,30 +81,13 @@ jobs:
         with:
           shared-key: worker-e2e
           cache-all-crates: true
-      - name: Cache npm downloads
-        uses: actions/cache@v6
+      - uses: actions/setup-node@v6
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-wrangler-4.152.0
-      - name: Apply migrations to the local database
-        run: npx --yes wrangler@4.152.0 d1 migrations apply app --local --persist-to "$PERSIST_DIR"
-      - name: Start the Worker
-        run: |
-          npx --yes wrangler@4.152.0 dev --port 8791 --persist-to "$PERSIST_DIR" \
-            --var GOOGLE_CLIENT_ID:ci-client.apps.example \
-            --var GOOGLE_CLIENT_SECRET:ci-client-secret \
-            --var GOOGLE_REDIRECT_URL:http://localhost:8791/auth/google/callback \
-            > "$RUNNER_TEMP/wrangler.log" 2>&1 &
-          for _ in $(seq 1 120); do
-            if curl --silent --fail http://localhost:8791/manifest.webmanifest > /dev/null; then exit 0; fi
-            sleep 5
-          done
-          echo "the Worker did not start" >&2
-          exit 1
-      - run: python3 scripts/test-worker.py
-      - name: Show the Wrangler log
-        if: failure()
-        run: cat "$RUNNER_TEMP/wrangler.log"
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: python3 scripts/test-cli.py
+      - run: npm run test:worker
 
   deploy:
     needs: [changes, check, wasm, worker]

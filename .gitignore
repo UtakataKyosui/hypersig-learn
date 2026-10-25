@@ -2,4 +2,8 @@
 /build
 /.wrangler
 /.dev.vars
+/.dev.vars.*
 /dist
+/node_modules
+/.cloudflare
+__pycache__/

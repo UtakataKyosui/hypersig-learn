@@ -8,8 +8,7 @@
 #   scripts/legacy-owner.sh users [--local|--remote]
 #   scripts/legacy-owner.sh status|migrate|rollback USER_ID [--local|--remote]
 #
-# The D1 database is `app`. Take a backup first for --remote:
-#   npx wrangler d1 export app --remote --output backup.sql
+# Set D1_DATABASE_ID for --remote and take a Cloudflare dashboard backup first.
 set -eu
 
 action="${1:-}"
@@ -28,18 +27,25 @@ case "$user" in
     *[!A-Za-z0-9_-]*) echo "USER_ID must contain only letters, digits, - and _" >&2; exit 2 ;;
 esac
 
-dir=$(dirname "$0")/legacy-owner
+cd "$(dirname "$0")/.."
+dir=scripts/legacy-owner
 # PERSIST_DIR points a --local run at a disposable local database.
-wrangler="npx --yes wrangler@4.152.0"
-persist=""
-if [ -n "${PERSIST_DIR:-}" ]; then persist="--persist-to $PERSIST_DIR"; fi
+query() {
+    if [ "$target" = --local ]; then
+        npx --no-install cf d1 raw 00000000-0000-4000-8000-000000000001 --local --persist-to "${PERSIST_DIR:-.wrangler/state}" --sql "$1"
+    else
+        : "${D1_DATABASE_ID:?Set D1_DATABASE_ID for --remote}"
+        npx --no-install cf d1 raw "$D1_DATABASE_ID" --sql "$1"
+    fi
+}
 
 if [ "$action" = users ]; then
-    $wrangler d1 execute app "$target" $persist --command "SELECT u.id, datetime(u.created_at/1000,'unixepoch') AS created_utc, u.status, (SELECT count(*) FROM medications m WHERE m.owner=u.id) AS medications FROM users u ORDER BY u.created_at"
+    query "SELECT u.id, datetime(u.created_at/1000,'unixepoch') AS created_utc, u.status, (SELECT count(*) FROM medications m WHERE m.owner=u.id) AS medications FROM users u ORDER BY u.created_at"
     exit 0
 fi
 
-found=$($wrangler d1 execute app "$target" $persist --json --command "SELECT count(*) AS n FROM users WHERE id='$user' AND status='active'" | sed -n 's/.*"n": *\([0-9]*\).*/\1/p' | head -n 1)
+result=$(query "SELECT count(*) AS n FROM users WHERE id='$user' AND status='active'")
+found=$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["results"]["rows"][0][0])')
 if [ "$found" != "1" ] && [ "$action" = "migrate" ]; then
     echo "no active user $user in the database: the user must sign in once first" >&2
     exit 1
@@ -49,11 +55,11 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 sed "s/@USER@/$user/g" "$dir/status.sql" > "$work/status.sql"
 echo "== before"
-$wrangler d1 execute app "$target" $persist --file "$work/status.sql"
+query "@$work/status.sql"
 if [ "$action" != "status" ]; then
     echo "== $action"
     sed "s/@USER@/$user/g" "$dir/$action.sql" > "$work/action.sql"
-    $wrangler d1 execute app "$target" $persist --file "$work/action.sql"
+    query "@$work/action.sql"
     echo "== after"
-    $wrangler d1 execute app "$target" $persist --file "$work/status.sql"
+    query "@$work/status.sql"
 fi

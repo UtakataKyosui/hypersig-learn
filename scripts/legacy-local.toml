@@ -1,0 +1,6 @@
+# Only for importing the pre-cf local DB. Never use for dev or deployment.
+name = "app"
+compatibility_date = "2026-10-01"
+[[d1_databases]]
+binding = "DB"
+database_name = "app"

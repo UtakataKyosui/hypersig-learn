@@ -1,0 +1,19 @@
+{
+  "name": "hypersig-learn",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "dev": "cf dev",
+    "build": "cf build",
+    "db:migrate:local": "cf d1 migrations apply 00000000-0000-4000-8000-000000000001 --local --persist-to .wrangler/state",
+    "db:import:local": "python3 scripts/import-local-d1.py",
+    "test:worker": "bash scripts/test-worker.sh"
+  },
+  "devDependencies": {
+    "cf": "1.0.0-beta.21",
+    "wrangler": "4.152.0"
+  }
+}

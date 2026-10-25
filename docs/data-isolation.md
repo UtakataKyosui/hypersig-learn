@@ -20,9 +20,11 @@
 
 #4 までのデータは `owner = 'owner'` で保存されている。最初にログインした利用者へ自動で割り当てることはしない。移行先は利用者が明示する。
 
+事前に本番の既存 UUID を `D1_DATABASE_ID` に設定する。`cf` は DB 名での指定を受け付けない。
+
 1. 移行先の人が Google でログインして、`users` に行を作る。
 2. `scripts/legacy-owner.sh users --remote` で利用者の ID・作成時刻（UTC）・状態・所有する服薬数を表示し、移行先の行を選ぶ。ID はアプリの画面には表示しない。作成時刻が近い利用者が複数いるときは、移行先の人にログイン時刻を確認して取り違えを避ける。
-3. `npx wrangler d1 export app --remote --output backup.sql` でバックアップする。
+3. Cloudflare ダッシュボードから対象の D1 を export してバックアップする（固定した `cf` には SQL export コマンドがない）。
 4. `scripts/legacy-owner.sh status <USER_ID> --remote` で件数を確認し、`migrate` で引き継ぐ。
 5. 切り戻しは `scripts/legacy-owner.sh rollback <USER_ID> --remote`。
 
