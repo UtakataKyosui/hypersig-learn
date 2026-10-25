@@ -27,11 +27,11 @@ const SUBSCRIBE_JS: &str = include_str!("../assets/push-subscribe.js");
 const ICON_192_PNG: &[u8] = include_bytes!("../assets/icon-192.png");
 const ICON_512_PNG: &[u8] = include_bytes!("../assets/icon-512.png");
 
-fn manifest_json() -> String {
+fn manifest_json(start_url: &str) -> String {
     serde_json::json!({
         "name": "服薬リマインダー",
         "short_name": "服薬",
-        "start_url": "/notifications",
+        "start_url": start_url,
         "scope": SCOPE,
         "display": "standalone",
         "background_color": "#ffffff",
@@ -71,7 +71,12 @@ pub fn routes<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> 
         )
         .route(
             MANIFEST,
-            get(|| async { asset("application/manifest+json", manifest_json()) }),
+            get(|| async {
+                asset(
+                    "application/manifest+json",
+                    manifest_json(crate::NOTIFICATIONS.url(()).as_str()),
+                )
+            }),
         )
         .route(ICON_192, get(|| async { asset("image/png", ICON_192_PNG) }))
         .route(ICON_512, get(|| async { asset("image/png", ICON_512_PNG) }))
@@ -130,7 +135,8 @@ mod tests {
 
     #[test]
     fn manifest_scope_covers_start_url_and_names_the_icons() {
-        let manifest: serde_json::Value = serde_json::from_str(&manifest_json()).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest_json(crate::NOTIFICATIONS.url(()).as_str())).unwrap();
         assert_eq!(manifest["scope"], SCOPE);
         assert!(manifest["start_url"].as_str().unwrap().starts_with(SCOPE));
         assert_eq!(manifest["display"], "standalone");

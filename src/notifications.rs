@@ -82,9 +82,15 @@ fn endpoint_is_allowed(endpoint: &str) -> bool {
     let Some(rest) = endpoint.strip_prefix("https://") else {
         return false;
     };
-    let host = rest.split('/').next().unwrap_or_default();
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
     endpoint.len() <= 2048
-        && !host.contains(['@', ':', '?', '#'])
+        && endpoint
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'\\')
+        && !host.is_empty()
+        && host.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+        })
         && PUSH_HOST_SUFFIXES
             .iter()
             .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
@@ -358,22 +364,39 @@ pub async fn run_scheduled(env: &Env) -> worker::Result<()> {
         p256dh: row.p256dh,
         auth: row.auth,
     };
-    let outcome = push::send(&subscription, b"probe", &subject, &private_key, now / 1000).await?;
+    let sent = push::send(&subscription, b"probe", &subject, &private_key, now / 1000).await;
+    let outcome = match sent {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            restore_claim(&db, &subscription.endpoint, probe_at).await?;
+            return Err(error);
+        }
+    };
     console_log!("push probe: {outcome:?}");
     match outcome {
         Outcome::Expired => {
-            db.prepare("DELETE FROM push_probe WHERE id = 1")
+            db.prepare("DELETE FROM push_probe WHERE id = 1 AND endpoint = ?1")
+                .bind(&[subscription.endpoint.as_str().into()])?
                 .run()
                 .await?;
         }
         Outcome::Retry => {
-            db.prepare("UPDATE push_probe SET probe_at = ?1 WHERE id = 1 AND probe_at IS NULL")
-                .bind(&[probe_at.into()])?
-                .run()
-                .await?;
+            restore_claim(&db, &subscription.endpoint, probe_at).await?;
         }
         Outcome::Accepted | Outcome::Rejected(_) => {}
     }
+    Ok(())
+}
+
+/// Puts the claimed probe time back, unless the subscription was replaced or
+/// a newer probe was reserved while the send was in flight.
+async fn restore_claim(db: &D1Database, endpoint: &str, probe_at: f64) -> worker::Result<()> {
+    db.prepare(
+        "UPDATE push_probe SET probe_at = ?1 WHERE id = 1 AND probe_at IS NULL AND endpoint = ?2",
+    )
+    .bind(&[probe_at.into(), endpoint.into()])?
+    .run()
+    .await?;
     Ok(())
 }
 
@@ -386,6 +409,19 @@ mod tests {
             endpoint: endpoint.to_owned(),
             p256dh: "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4".to_owned(),
             auth: "BTBZMqHH6r4Tts7J_aSIgg".to_owned(),
+        }
+    }
+
+    #[test]
+    fn refuses_endpoints_the_fetch_parser_reads_as_another_host() {
+        for endpoint in [
+            "https://example.org\\x.fcm.googleapis.com/probe",
+            "https://example.org#.fcm.googleapis.com/probe",
+            "https://example.org?.fcm.googleapis.com/probe",
+            "https://FCM.googleapis.com/x",
+            "https://fcm.googleapis.com/a b",
+        ] {
+            assert!(validate(&input(endpoint)).is_err(), "{endpoint}");
         }
     }
 
