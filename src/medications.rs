@@ -9,7 +9,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use hypersig::{Action, Form, Page, Patches, Signals};
+use hypersig::{Action, Form, Patches, Signals};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Signals, Serialize, Deserialize)]
@@ -83,18 +83,58 @@ impl Editor {
         })
     }
 }
+/// A medication of the list page: its name, why it is or is not notifying,
+/// and the sentence about its next notification.
 #[derive(Signals, Serialize, Deserialize)]
 pub struct Summary {
     pub id: String,
     pub name: String,
     pub revision: i32,
-    pub next_at: Option<hypersig::Timestamp>,
+    /// `State::key` of the medication.
+    pub state: String,
+    /// `State::label`, with the pause period while one holds today.
+    pub status: String,
+    pub next: String,
+}
+/// A dose planned for today, with the medication it belongs to.
+#[derive(Clone, Signals, Serialize, Deserialize)]
+pub struct TodayDose {
+    /// `{medication id}:{slot id}`.
+    pub key: String,
+    pub medication_id: String,
+    pub name: String,
+    pub summary: String,
+    /// `HH:mm`.
+    pub time: String,
+    /// The amount and the timing of the slot.
+    pub detail: String,
 }
 #[derive(Signals, Serialize, Deserialize)]
 pub struct Settings {
     pub form: Form<Editor>,
+    /// By name.
     pub items: Vec<Summary>,
+    /// By time.
+    pub today: Vec<TodayDose>,
+    pub today_label: String,
+    /// The next notification of all medications.
+    pub next: String,
+    /// The next notification in parts, all `""` while there is none: the
+    /// time of day, the day (`今日` or `10月26日`), the medication, and the
+    /// amount and timing.
+    pub next_time: String,
+    pub next_day: String,
+    pub next_name: String,
+    pub next_detail: String,
     pub problem: String,
+    /// The HTTP status of a failed call, `0` while none failed.
+    pub status: i32,
+    pub busy: bool,
+    pub notice: String,
+    /// The medication the delete dialog asks about.
+    pub removing: String,
+    pub removing_revision: i32,
+    pub removing_label: String,
 }
 #[derive(Serialize, Deserialize)]
 pub struct Delete {
@@ -102,8 +142,8 @@ pub struct Delete {
     pub revision: i32,
 }
 pub const SAVE: Action<Settings, Editor> = Action::post("/medications/save");
-pub const DELETE: Action<Settings, Delete> = Action::post("/medications/delete");
 pub const LOAD: Action<Settings, String> = Action::post("/medications/load");
+#[derive(Debug)]
 pub enum Error {
     Invalid,
     Missing,
@@ -131,18 +171,13 @@ impl IntoResponse for Error {
 }
 pub fn summary(editor: &Editor, saved_at: i64, now: i64) -> Result<Summary, Error> {
     let medication = editor.domain(saved_at)?;
-    let next = medication
-        .next(UtcInstant(now))
-        .map_err(|_| Error::Invalid)?;
-    Ok(Summary {
-        id: editor.id.clone(),
-        name: medication.name,
-        revision: editor.revision,
-        next_at: match next {
-            crate::domain::NextDose::At(o) => Some(hypersig::Timestamp::from_millis(o.at.0)),
-            _ => None,
-        },
-    })
+    let assessment =
+        crate::schedule_status::assess(&medication, UtcInstant(now)).map_err(|_| Error::Invalid)?;
+    Ok(crate::schedule_status::summary(
+        editor,
+        &medication.name,
+        &assessment,
+    ))
 }
 fn saved(editor: Editor, now: i64) -> Result<Patches<Settings>, Error> {
     let item = summary(&editor, now, now)?;
@@ -150,26 +185,8 @@ fn saved(editor: Editor, now: i64) -> Result<Patches<Settings>, Error> {
         .signals(Settings::form().patch(Form::new(editor)))
         .list(Settings::items().patch_upsert(&[item], |i| i.at(Summary::id()))))
 }
-pub async fn save(
-    state: AppState,
-    member: Member,
-    mut editor: Editor,
-) -> Result<Patches<Settings>, Error> {
-    let now = hypersig::Timestamp::now().as_millis();
-    if editor.revision > 0 {
-        let row = crate::repository::load(&state.db, member.owner(), &editor.id).await?;
-        if row.revision != editor.revision {
-            return Err(Error::Conflict);
-        }
-    }
-    if editor.domain(now).is_err() {
-        return Ok(Settings::form()
-            .reject(&hypersig::FieldErrors::new().add(
-                Editor::medication(),
-                "入力値・重複する休薬期間を確認してください。",
-            ))
-            .into());
-    }
+/// Trims and normalizes the fields the repository stores as given.
+fn normalize(editor: &mut Editor) {
     editor.medication.name = editor.medication.name.trim().into();
     editor.medication.interval = editor.medication.interval.max(1);
     if editor.medication.repeat != "weekdays" {
@@ -178,59 +195,47 @@ pub async fn save(
     for slot in &mut editor.slots {
         slot.input.unit = slot.input.unit.trim().into();
     }
+}
+/// Writes `editor` and returns it with its revision advanced. The repository
+/// refuses a write whose revision is no longer the stored one.
+pub async fn commit(
+    state: &AppState,
+    member: &Member,
+    mut editor: Editor,
+    now: i64,
+) -> Result<Editor, Error> {
+    editor.domain(now)?;
+    normalize(&mut editor);
     crate::repository::save(&state.db, member.owner(), &editor, now).await?;
     editor.revision += 1;
-    saved(editor, now)
+    Ok(editor)
 }
-pub async fn delete(
+pub async fn save(
     state: AppState,
     member: Member,
-    input: Delete,
+    editor: Editor,
 ) -> Result<Patches<Settings>, Error> {
-    crate::repository::delete(&state.db, member.owner(), &input).await?;
-    Ok(Settings::items()
-        .patch_remove(&[input.id], |i| i.at(Summary::id()))
-        .into())
+    let now = hypersig::Timestamp::now().as_millis();
+    if editor.revision > 0 {
+        let row = crate::repository::load(&state.db, member.owner(), &editor.id).await?;
+        if row.revision != editor.revision {
+            return Err(Error::Conflict);
+        }
+    }
+    match commit(&state, &member, editor, now).await {
+        Ok(editor) => saved(editor, now),
+        Err(Error::Invalid) => Ok(Settings::form()
+            .reject(&hypersig::FieldErrors::new().add(
+                Editor::medication(),
+                "入力値・重複する休薬期間を確認してください。",
+            ))
+            .into()),
+        Err(error) => Err(error),
+    }
 }
 pub async fn load(state: AppState, member: Member, id: String) -> Result<Patches<Settings>, Error> {
     let row = crate::repository::load(&state.db, member.owner(), &id).await?;
     Ok(Settings::form().patch(Form::new(row.editor()?)).into())
-}
-pub async fn page(state: AppState, member: Member, (): ()) -> Result<Page<Settings>, Error> {
-    let now = hypersig::Timestamp::now().as_millis();
-    let items = crate::repository::list(&state.db, member.owner())
-        .await?
-        .into_iter()
-        .map(|row| summary(&row.editor()?, row.updated_at, now))
-        .collect::<Result<Vec<_>, Error>>()?;
-    let editor = Editor {
-        id: random_id()?,
-        revision: 0,
-        enabled: true,
-        medication: MedicationInput {
-            name: String::new(),
-            start: UtcInstant(now)
-                .tokyo_date()
-                .map_err(|_| Error::Invalid)?
-                .to_string(),
-            end: String::new(),
-            repeat: "daily".into(),
-            interval: 1,
-            weekdays: 0,
-        },
-        slots: vec![],
-        pauses: vec![],
-    };
-    Ok(Page::new(
-        "服薬設定",
-        Settings {
-            form: Form::new(editor),
-            items,
-            problem: String::new(),
-        },
-    )
-    .child(hypersig::html::p().text("服薬設定 · Asia/Tokyo"))
-    .child(crate::auth::sign_out_button()))
 }
 pub fn random_id() -> Result<String, Error> {
     use base64::Engine as _;
@@ -283,7 +288,7 @@ mod tests {
         assert!(event.contains("upsert"));
         let serialized = serde_json::to_value(form).unwrap();
         assert_eq!(serialized["initial"], serialized["value"]);
-        assert!(summary(&editor(), now, now).ok().unwrap().next_at.is_some());
+        assert_eq!(summary(&editor(), now, now).ok().unwrap().state, "active");
     }
     #[test]
     fn duplicate_ids_overlapping_pauses_and_invalid_domain_values_are_refused() {

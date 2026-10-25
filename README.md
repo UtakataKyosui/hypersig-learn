@@ -58,5 +58,6 @@ pull request では `check`（fmt、clippy、test）と `wasm` が動く。main 
 | ページ | 内容 |
 |---|---|
 | [docs/ci-cd.md](docs/ci-cd.md) | CI/CD の構成、GitHub Secrets の一覧、セットアップの詳細 |
+| [docs/medication-ui.md](docs/medication-ui.md) | 服薬設定画面の構成、状態表示、差分更新、複数タブ同期の採否、検証状況（#5） |
 | [docs/cloudflare-cli-evaluation.md](docs/cloudflare-cli-evaluation.md) | `cf` CLI への移行記録、ローカル DB の引き継ぎと制約（#47） |
 | [docs/mvp0-web-push-verification.md](docs/mvp0-web-push-verification.md) | Web Push の検証記録と実機での手順 |

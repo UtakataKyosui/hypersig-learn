@@ -15,12 +15,20 @@ mod assets;
 mod auth;
 mod auth_store;
 pub mod domain;
+mod failure;
+pub mod form_fields;
+mod medication_edit;
+pub mod medication_form;
 pub mod medication_input;
+mod medication_list;
+mod medication_style;
 mod medications;
 mod notifications;
 mod oidc;
+mod pause_edit;
 mod push;
 mod repository;
+mod schedule_status;
 pub mod schedule_view;
 mod session_state;
 mod session_store;
@@ -65,7 +73,9 @@ hypersig::routes! {
     fn pages(Router<AppState>);
     const INDEX: Route = "/" => index;
     const NOTIFICATIONS: Route = "/notifications" => notifications::settings_page;
-    const MEDICATIONS: Route = "/medications" => medications::page;
+    const MEDICATIONS: Route = "/medications" => medication_list::page;
+    const NEW_MEDICATION: Route = "/medications/new" => medication_edit::new_page;
+    const MEDICATION: Route<String> = "/medications/{id}" => medication_edit::page;
 }
 
 const DOUBLE: Action<Counter, i32> = Action::post("/double");
@@ -428,8 +438,16 @@ async fn fetch(
         .action(DOUBLE, double)
         .action(SAVE, save)
         .action(medications::SAVE, medications::save)
-        .action(medications::DELETE, medications::delete)
+        .action(medication_list::REMOVE, medication_list::remove)
         .action(medications::LOAD, medications::load)
+        .action(
+            medication_edit::SAVE_MEDICATION,
+            medication_edit::save_medication,
+        )
+        .action(medication_edit::SAVE_SLOT, medication_edit::save_slot)
+        .action(medication_edit::REMOVE_SLOT, medication_edit::remove_slot)
+        .action(pause_edit::SAVE_PAUSE, pause_edit::save_pause)
+        .action(pause_edit::REMOVE_PAUSE, pause_edit::remove_pause)
         .stream(CLOCK, clock)
         .stream(SAVES, saves)
         .layer(axum::middleware::from_fn_with_state(

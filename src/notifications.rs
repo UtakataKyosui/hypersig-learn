@@ -4,17 +4,17 @@
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use hypersig::html::{Class, CustomEvent, div, el, h1, main, p};
-use hypersig::{Action, Page, Patches, Signals};
+use hypersig::html::{Class, CustomEvent, El, div, el, h1, h2, main, p, section, span};
+use hypersig::{Action, Page, Patches, Sig, Signals, if_else};
 use hypersig_ui::{
-    AlertVariant, ButtonSize, ButtonVariant, Level, alert, alert_description, alert_title, button,
-    card, card_content, card_description, card_header, card_title,
+    AlertVariant, ButtonSize, ButtonVariant, alert, alert_description, alert_title, button,
 };
 use serde::{Deserialize, Serialize};
 use worker::{Date, Env, console_error, console_log};
 
 use crate::AppState;
 use crate::assets;
+use crate::medication_style::{STYLE, Tab, head, tab_bar, theme};
 use crate::push::{self, Outcome, Subscription};
 
 /// The browser's report on notification support and permission.
@@ -159,65 +159,153 @@ fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
             String::new()
         },
     };
+    let granted = permission.equals("granted");
+    let ready = granted.clone().and(saved);
     Page::new("通知設定", initial)
         .global(hypersig_ui::global())
         .theme(hypersig_ui::theme())
+        .theme(theme())
+        .style(STYLE)
         .icon(assets::ICON_192)
         .script(assets::SUBSCRIBE_SCRIPT)
         .child(
             main()
-                .class(Class::new("shell"))
-                .child(h1().text("通知設定"))
-                .child(crate::auth::sign_out_button())
+                .class(Class::new("med-shell"))
+                .child(head(
+                    h1().text("通知設定"),
+                    p().text("いつもの端末に、そっとお知らせ。"),
+                ))
                 .child(
-                    card()
+                    alert(AlertVariant::Destructive)
+                        .show(!problem.is_empty())
+                        .child(alert_title().text("通知を設定できません"))
+                        .child(alert_description().bind_text(problem)),
+                )
+                .child(
+                    section()
+                        .class(Class::new("med-panel"))
+                        .attr("aria-labelledby", "ready-heading")
                         .child(
-                            card_header()
-                                .child(card_title(Level::H2).text("プッシュ通知"))
-                                .child(
-                                    card_description().text("許可と購読の保存は別々に確認します。"),
-                                ),
+                            h2().id("ready-heading")
+                                .class(Class::new("med-panel-title"))
+                                .bind_text(if_else(
+                                    ready,
+                                    "✓ 通知の準備ができています",
+                                    "通知の準備ができていません",
+                                )),
                         )
                         .child(
-                            card_content()
-                                .child(
-                                    el("push-subscribe")
-                                        .attr("vapid-key", vapid_public)
-                                        .attr("worker", assets::SERVICE_WORKER)
-                                        .attr("scope", assets::SCOPE)
-                                        .attr("label", "通知を有効にする")
-                                        .on_custom(PUSH_STATUS, move |status| {
-                                            permission.set(status)
-                                        })
-                                        .on_custom(PUSH_SUBSCRIPTION, move |detail| {
-                                            REGISTER.call_with(detail).error(problem)
-                                        }),
-                                )
-                                .child(
-                                    p().text("ブラウザの許可: ")
-                                        .child(el("strong").bind_text(permission)),
-                                )
-                                .child(
-                                    div()
-                                        .child(
-                                            p().show(saved).text("購読をサーバーに保存しました。"),
-                                        )
-                                        .child(p().show(!saved).text("購読は未保存です。")),
-                                )
-                                .child(
-                                    button(ButtonVariant::Outline, ButtonSize::Lg)
-                                        .on_click(SCHEDULE_PROBE.call().error(problem))
-                                        .text("1分後にテスト通知を送る"),
-                                )
-                                .child(p().bind_text(probe))
-                                .child(
-                                    alert(AlertVariant::Destructive)
-                                        .show(!problem.is_empty())
-                                        .child(alert_title().text("通知を設定できません"))
-                                        .child(alert_description().bind_text(problem)),
-                                ),
+                            div()
+                                .class(Class::new("med-row"))
+                                .child(span().text("ブラウザの許可"))
+                                .child(el("strong").bind_text(if_else(
+                                    granted,
+                                    "許可済み",
+                                    if_else(
+                                        permission.equals("denied"),
+                                        "拒否",
+                                        if_else(
+                                            permission.equals("unsupported"),
+                                            "非対応",
+                                            "未確認",
+                                        ),
+                                    ),
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .class(Class::new("med-row"))
+                                .child(span().text("この端末の通知先"))
+                                .child(el("strong").bind_text(if_else(
+                                    saved,
+                                    "保存済み",
+                                    "未保存",
+                                ))),
+                        )
+                        .child(
+                            el("push-subscribe")
+                                .attr("vapid-key", vapid_public)
+                                .attr("worker", assets::SERVICE_WORKER)
+                                .attr("scope", assets::SCOPE)
+                                .attr("label", "通知を有効にする")
+                                .on_custom(PUSH_STATUS, move |status| permission.set(status))
+                                .on_custom(PUSH_SUBSCRIPTION, move |detail| {
+                                    REGISTER.call_with(detail).error(problem)
+                                }),
                         ),
+                )
+                .child(preview_section())
+                .child(probe_section(problem, probe))
+                .child(
+                    div()
+                        .class(Class::new("med-actions"))
+                        .child(crate::auth::sign_out_button()),
+                )
+                .child(tab_bar(Tab::Settings)),
+        )
+}
+
+fn preview_section() -> El<NotificationSettings> {
+    section()
+        .class(Class::new("med-section"))
+        .attr("aria-labelledby", "preview-heading")
+        .child(
+            h2().id("preview-heading")
+                .class(Class::new("med-section-title"))
+                .text("通知のプレビュー"),
+        )
+        .child(
+            div()
+                .class(Class::new("med-preview"))
+                .child(
+                    span()
+                        .class(Class::new("med-icon"))
+                        .attr("aria-hidden", "true")
+                        .text("葉"),
+                )
+                .child(
+                    span()
+                        .class(Class::new("med-preview-text"))
+                        .child(el("strong").text("服薬の時間です"))
+                        .child(span().text("アプリで今日の予定を確認してください")),
                 ),
+        )
+        .child(
+            p().class(Class::new("med-muted"))
+                .text("薬名や量は通知に表示しません。"),
+        )
+}
+
+fn probe_section(
+    problem: Sig<NotificationSettings, String>,
+    probe: Sig<NotificationSettings, String>,
+) -> El<NotificationSettings> {
+    section()
+        .class(Class::new("med-section"))
+        .attr("aria-labelledby", "probe-heading")
+        .child(
+            h2().id("probe-heading")
+                .class(Class::new("med-section-title"))
+                .text("この端末で受信を確かめる"),
+        )
+        .child(
+            p().class(Class::new("med-muted"))
+                .text("1分後に、テスト通知を予約します。"),
+        )
+        .child(
+            button(ButtonVariant::Default, ButtonSize::Lg)
+                .class(Class::new("med-cta"))
+                .on_click(SCHEDULE_PROBE.call().error(problem))
+                .text("テスト通知を予約"),
+        )
+        .child(
+            p().class(Class::new("med-muted"))
+                .show(!probe.is_empty())
+                .bind_text(probe),
+        )
+        .child(
+            p().class(Class::new("med-note"))
+                .text("時刻は Asia/Tokyo（日本時間）で固定です。"),
         )
 }
 
@@ -432,5 +520,7 @@ mod tests {
         assert!(html.contains("data-hs-on-custom"));
         assert!(html.contains("/notifications/subscription"));
         assert!(!html.contains("利用者 ID"));
+        assert!(html.contains(crate::MEDICATIONS.path()));
+        assert!(html.contains(r#"aria-current="page""#));
     }
 }
