@@ -40,6 +40,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 opener = urllib.request.build_opener(NoRedirect)
 
 
+NULL = object()
+
+
 def request(path, data=None, expected=200, cookie=None, headers=None, method=None):
     global checks
     h = {'Accept': 'text/event-stream', 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json'}
@@ -47,7 +50,7 @@ def request(path, data=None, expected=200, cookie=None, headers=None, method=Non
         h['Cookie'] = cookie
     if headers:
         h.update(headers)
-    r = urllib.request.Request(base + path, data=json.dumps(data).encode() if data is not None else None, headers=h, method=method)
+    r = urllib.request.Request(base + path, data=b'null' if data is NULL else json.dumps(data).encode() if data is not None else None, headers=h, method='POST' if data is NULL else method)
     try:
         response = opener.open(r)
     except urllib.error.HTTPError as e:
@@ -123,6 +126,14 @@ request('/notifications/subscription', sub, cookie=cookie_a)
 request('/notifications/subscription', sub, cookie=cookie_a)
 (_, body) = request('/notifications/subscription/status', sub['endpoint'], cookie=cookie_a)
 assert '"saved":true' in body
+
+# The counter is each user's own: a save by one is invisible to the other.
+request('/save', 7, cookie=cookie_a)
+request('/save', 9, cookie=cookie_b)
+counters = {row['owner']: row['count'] for row in auth_fixture.query(PERSIST, f"SELECT owner,count FROM counters WHERE owner IN ('{user_a}','{user_b}')")}
+assert counters == {user_a: 7, user_b: 9}, counters
+# A user schedules and cancels only a probe of their own subscription.
+request('/notifications/probe', NULL, 409, cookie=cookie_b)
 
 # Another user cannot read, change, delete, take over or cancel anything of the first.
 request('/medications/load', 'runtime-med-' + suffix, 404, cookie=cookie_b)

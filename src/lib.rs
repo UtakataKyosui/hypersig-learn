@@ -170,11 +170,11 @@ impl IntoResponse for DbError {
 }
 
 impl AppState {
-    async fn saved(&self) -> Result<i32, DbError> {
-        Ok(repository::counter_saved(&self.db).await?)
+    async fn saved(&self, member: &auth::Member) -> Result<i32, DbError> {
+        Ok(repository::counter_saved(&self.db, member.owner()).await?)
     }
-    async fn save(&self, count: i32) -> Result<(), DbError> {
-        Ok(repository::counter_save(&self.db, count).await?)
+    async fn save(&self, member: &auth::Member, count: i32) -> Result<(), DbError> {
+        Ok(repository::counter_save(&self.db, member.owner(), count).await?)
     }
 
     /// Tells the hub that a count was saved. A failure is logged and the save
@@ -217,10 +217,10 @@ impl AppState {
     }
 }
 
-async fn index(state: AppState, _: auth::Member, (): ()) -> Result<Page<Counter>, DbError> {
+async fn index(state: AppState, member: auth::Member, (): ()) -> Result<Page<Counter>, DbError> {
     let count = Counter::count();
     let problem = Counter::problem();
-    let saved = state.saved().await?;
+    let saved = state.saved(&member).await?;
     let initial = Counter {
         count: saved,
         saved,
@@ -338,24 +338,28 @@ async fn double(_: AppState, _: auth::Member, count: i32) -> Patches<Counter> {
     Counter::count().patch(count.saturating_mul(2)).into()
 }
 
-async fn save(state: AppState, _: auth::Member, count: i32) -> Result<Patches<Counter>, DbError> {
-    state.save(count).await?;
+async fn save(
+    state: AppState,
+    member: auth::Member,
+    count: i32,
+) -> Result<Patches<Counter>, DbError> {
+    state.save(&member, count).await?;
     state.publish().await;
     Ok(Counter::problem().patch(String::new()).into())
 }
 
 /// The saved count, once, then again after each save through any isolate.
 /// A failed read is logged and skipped, so the tab keeps the count it shows.
-fn saves(state: AppState, _: auth::Member, (): ()) -> impl Stream<Item = Patches<Counter>> {
-    stream::unfold((state, None), |(state, feed)| async move {
+fn saves(state: AppState, member: auth::Member, (): ()) -> impl Stream<Item = Patches<Counter>> {
+    stream::unfold((state, member, None), |(state, member, feed)| async move {
         let feed = state.next_save(feed).await;
-        let patch = if let Ok(saved) = state.saved().await {
+        let patch = if let Ok(saved) = state.saved(&member).await {
             Some(Counter::saved().patch(saved).into())
         } else {
             console_error!("D1: storage failure");
             None
         };
-        Some((patch, (state, Some(feed))))
+        Some((patch, (state, member, Some(feed))))
     })
     .filter_map(future::ready)
 }
