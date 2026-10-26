@@ -39,6 +39,7 @@ for _ in {1..60}; do
 done
 if [[ "$ready" != true ]]; then cat "$work/dev.log"; exit 1; fi
 if ! python3 scripts/test-worker.py; then cat "$work/dev.log"; exit 1; fi
+if ! npx --no-install playwright test; then cat "$work/dev.log"; exit 1; fi
 # Local Explorer replaces --test-scheduled, which cf's Wrangler delegate rejects.
 curl --fail --silent --show-error -X POST \
   'http://localhost:8791/cdn-cgi/local/explorer/api/local/scheduled?worker=app' \
