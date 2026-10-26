@@ -9,7 +9,7 @@
 | `medications` | `owner` 列 | 一覧・取得・保存・削除はすべて `owner=?` を含む。他人の ID を指定すると取得・保存は404、削除は409（変更なし） |
 | `schedules`・`dose_slots`・`pause_periods` | `medications` への外部キー | 薬を所有者条件で解決した後にだけ書く。別の薬の枠 ID は奪取できない |
 | `push_subscriptions` | `owner` 列 | 登録は同じ所有者の再登録だけ更新、別所有者の endpoint は409。状態確認・解除は `owner=?` |
-| `push_probe` | `owner` 列（主キー） | 利用者ごとに1行。登録・予約・解除・送信後の復元はその所有者の行だけを更新する |
+| `push_probe` | `owner` 列（主キー） | 利用者ごとに1行。予約時は本人の有効なendpointを解決し、claim・完了はowner／generation／leaseで照合する |
 | `notification_jobs` | `medications` 経由 | 薬の所有者に従う |
 | `notification_deliveries` | ジョブと購読 | トリガー `delivery_owner` が、ジョブの薬の所有者と購読の所有者が異なる配信の作成を拒否する |
 | `counters` | `owner` 列（主キー） | カウンターと `/saves` ストリームは利用者ごと。Hub は「保存があった」ことだけを全ストリームへ通知し、各ストリームが自分の値を読み直す |
@@ -35,4 +35,4 @@
 ## 既知の制約
 
 - 同じブラウザで別の利用者がログインし、同じ Push endpoint を登録しようとすると、前の所有者が解除するまで409になる。
-- 配信ジョブの生成・送信（#6 配下）は未実装で、スキーマ側の制約（`delivery_owner`）までを用意している。
+- 配信ジョブの生成・送信は `delivery`、テスト通知は `probe_delivery` が担当し、ownerを購読と照合する。スキーマ側の `delivery_owner` も維持する。実機受信・本番Cronの受け入れは [MVP受け入れ記録](mvp-acceptance.md)の未実施欄を参照。
