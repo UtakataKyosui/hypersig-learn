@@ -28,7 +28,7 @@ POST の Sec-Fetch-Site、JSON Content-Type、引数 deserialize の拒否は hy
 
 SUBSCRIPTION_STATUS は本人の endpoint に対する有効状態だけを返す。購読は HTTPS の許可 Push ホストと P-256／auth 鍵を検証する。endpoint ごとに一意、同じ所有者の再登録は鍵更新・再有効化、別所有者への移管は拒否する。UNREGISTER は本人の endpoint 文字列を受けて無効化し、未完了配信と予約済み probe を取消する。404/410 による失効も無効化する。送信時の redirect は追わず、鍵が差し替わった購読を古い応答で失効させない。
 
-購読鍵は画面へ返さない。DB・送信障害は固定の分類のみログに残し、SQL、endpoint、鍵、薬名、量は出力しない。`push_probe` は技術検証用テスト通知の予約で、利用者ごとに1行を持ち、保存済みかつ有効な本人の購読だけを送信対象とする。服薬ジョブの生成・claim・再試行は #6 配下が担当する。
+購読鍵は画面へ返さない。DB・送信障害は固定の分類のみログに残し、SQL、endpoint、鍵、薬名、量は出力しない。`push_probe` は利用者ごとに1件のテスト通知予約を保持する。予約Actionは現在の端末のendpointを受け、本人の有効な購読から鍵を取得する。別端末を最後に登録していても宛先を取り違えない。予約ごとのgenerationと期限付きleaseで、途中停止から回収し、古い応答による新予約の更新を拒否する。服薬通知と同じ `delivery::deliver` が残りTTL・固定本文・期限内backoff・最大試行回数を適用する。`migrations/0005_probe_delivery.sql` が状態・世代・再試行欄と解除時の取消triggerを追加する。詳細と検証結果は [MVP受け入れ記録](mvp-acceptance.md)。
 
 ## 検証
 

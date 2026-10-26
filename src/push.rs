@@ -20,7 +20,6 @@ use worker::{Fetch, Headers, Method, Request, RequestInit};
 
 /// How long the push service keeps a message for a device that is offline.
 /// A medication reminder older than the 15-minute window is of no use.
-const TTL_SECONDS: u32 = 900;
 const RECORD_SIZE: u32 = 4096;
 const VAPID_LIFETIME_SECONDS: u64 = 12 * 60 * 60;
 
@@ -173,13 +172,14 @@ impl Outcome {
     }
 }
 
-/// Encrypts `plaintext` for `subscription` and posts it to the push service.
-pub async fn send(
+/// Encrypts and posts the payload with the remaining delivery TTL.
+pub async fn send_with_ttl(
     subscription: &Subscription,
     plaintext: &[u8],
     subject: &str,
     private_key: &str,
     now: u64,
+    ttl: u32,
 ) -> worker::Result<Outcome> {
     let body = encrypt(subscription, plaintext)
         .map_err(|error| worker::Error::RustError(format!("push encrypt: {error:?}")))?;
@@ -189,7 +189,7 @@ pub async fn send(
     headers.set("Authorization", &authorization)?;
     headers.set("Content-Encoding", "aes128gcm")?;
     headers.set("Content-Type", "application/octet-stream")?;
-    headers.set("TTL", &TTL_SECONDS.to_string())?;
+    headers.set("TTL", &ttl.to_string())?;
     headers.set("Urgency", "high")?;
     let mut init = RequestInit::new();
     init.with_method(Method::Post)

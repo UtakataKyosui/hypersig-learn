@@ -154,7 +154,14 @@ request('/save', 9, cookie=cookie_b)
 counters = {row['owner']: row['count'] for row in auth_fixture.query(PERSIST, f"SELECT owner,count FROM counters WHERE owner IN ('{user_a}','{user_b}')")}
 assert counters == {user_a: 7, user_b: 9}, counters
 # A user schedules and cancels only a probe of their own subscription.
-request('/notifications/probe', NULL, 409, cookie=cookie_b)
+request('/notifications/probe', sub['endpoint'], 409, cookie=cookie_b)
+request('/notifications/probe', NULL, 400, cookie=cookie_a)
+other_device = dict(sub, endpoint=sub['endpoint'] + '-other-device')
+request('/notifications/subscription', other_device, cookie=cookie_a)
+request('/notifications/probe', sub['endpoint'], cookie=cookie_a)
+probe = auth_fixture.query(PERSIST, f"SELECT endpoint,state,attempt_count FROM push_probe WHERE owner='{user_a}'")
+assert probe == [{'endpoint': sub['endpoint'], 'state': 'pending', 'attempt_count': 0}], probe
+request('/notifications/unsubscribe', other_device['endpoint'], cookie=cookie_a)
 
 # Another user cannot read, change, delete, take over or cancel anything of the first.
 request('/medications/load', 'runtime-med-' + suffix, 404, cookie=cookie_b)

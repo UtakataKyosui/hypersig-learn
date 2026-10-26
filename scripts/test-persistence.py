@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 QUERIES = [
     query
-    for source in ["src/repository.rs", "src/auth_store.rs", "src/session_store.rs"]
+    for source in ["src/repository.rs", "src/auth_store.rs", "src/session_store.rs", "src/delivery.rs", "src/probe_delivery.rs"]
     for query in re.findall(r'"((?:SELECT|INSERT|UPDATE|DELETE)[^"\n]+)"', (ROOT / source).read_text())
 ]
 
@@ -79,6 +79,37 @@ class Persistence(unittest.TestCase):
             self.assertEqual(self.db.execute("SELECT state FROM notification_jobs").fetchone()[0], "pending")
             self.assertEqual(self.db.execute("SELECT count(*) FROM pause_periods").fetchone()[0], 1)
 
+    def remove_subscription(self, endpoint, owner="owner"):
+        with self.db:
+            self.db.execute(sql("UPDATE push_subscriptions SET enabled=0,updated_at"), (endpoint, owner, 3000))
+            self.db.execute(sql("SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM push_subscriptions"), (endpoint, owner)).fetchone()
+            self.db.execute(sql("UPDATE push_probe SET probe_at=NULL,state='cancelled'"), (endpoint, owner))
+
+    def test_removal_before_registration_is_idempotent_and_allows_registration(self):
+        endpoint = "https://fcm.googleapis.com/unsaved"
+        self.remove_subscription(endpoint)
+        self.remove_subscription(endpoint)
+        with self.db:
+            self.db.execute(sql("INSERT INTO push_subscriptions"), ("sub", "owner", endpoint, "key", "auth", 4000))
+            self.db.execute(sql("SELECT CASE WHEN changes()=1 THEN 1 ELSE json('ownership"))
+        self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone(), (1,))
+
+    def test_removal_preserves_foreign_subscription_and_cancels_owned_delivery(self):
+        self.seed_job()
+        endpoint = "https://fcm.googleapis.com/a"
+        with self.db:
+            self.db.execute(sql("INSERT INTO push_probe(owner,endpoint,p256dh,auth,probe_at,next_attempt_at)"), (2000, "owner", endpoint))
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.remove_subscription(endpoint, "other")
+        self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone(), (1,))
+        self.assertEqual(self.db.execute("SELECT state FROM push_probe").fetchone(), ("pending",))
+        self.assertEqual(self.db.execute("SELECT state FROM notification_deliveries").fetchone(), ("pending",))
+        self.remove_subscription(endpoint)
+        self.remove_subscription(endpoint)
+        self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone(), (0,))
+        self.assertEqual(self.db.execute("SELECT state,probe_at FROM push_probe").fetchone(), ("cancelled", None))
+        self.assertEqual(self.db.execute("SELECT state FROM notification_deliveries").fetchone(), ("cancelled",))
+
     def test_subscription_reregistration_owner_and_disable(self):
         self.seed_job()
         query = sql("INSERT INTO push_subscriptions")
@@ -115,20 +146,19 @@ class Persistence(unittest.TestCase):
         self.seed_job()
         endpoint = "https://fcm.googleapis.com/a"
         with self.db:
-            self.db.execute(sql("INSERT INTO push_probe"), (endpoint, "new-key", "new-auth", "owner"))
             self.db.execute(sql("INSERT INTO push_subscriptions"),
                             ("sub", "owner", endpoint, "new-key", "new-auth", 2000))
-            # A late 410 response for old keys must not expire a replacement.
-            for prefix in ["UPDATE push_subscriptions SET enabled=0 WHERE endpoint", "DELETE FROM push_probe"]:
-                self.db.execute(sql(prefix), (endpoint, "key", "auth"))
+            self.db.execute(sql("INSERT INTO push_probe(owner,endpoint,p256dh,auth,probe_at"), (3000, "owner", endpoint))
+            self.db.execute(sql("UPDATE push_probe SET state='sending',attempt_count"), (3000, 123000, -897000, 6))
+            expire = sql("UPDATE push_subscriptions SET enabled=0 WHERE endpoint")
+            self.db.execute(expire, (endpoint, "owner", "key", "auth", 1000, 1, 123000))
             self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone()[0], 1)
             self.assertEqual(self.db.execute("SELECT count(*) FROM push_probe").fetchone()[0], 1)
-            for prefix in ["UPDATE push_subscriptions SET enabled=0 WHERE endpoint", "DELETE FROM push_probe"]:
-                self.db.execute(sql(prefix), (endpoint, "new-key", "new-auth"))
+            self.db.execute(expire, (endpoint, "owner", "new-key", "new-auth", 2000, 1, 123000))
         other = self.connect()
         try:
             self.assertEqual(other.execute("SELECT enabled FROM push_subscriptions").fetchone()[0], 0)
-            self.assertEqual(other.execute("SELECT count(*) FROM push_probe").fetchone()[0], 0)
+            self.assertEqual(other.execute("SELECT state FROM push_probe").fetchone()[0], "cancelled")
             self.assertEqual(other.execute("SELECT state FROM notification_deliveries").fetchone()[0], "cancelled")
         finally:
             other.close()
@@ -149,6 +179,7 @@ class Accounts(unittest.TestCase):
         self.db.executescript((ROOT / "migrations/0002_auth.sql").read_text())
         self.db.executescript((ROOT / "migrations/0003_owner_isolation.sql").read_text())
         self.db.executescript((ROOT / "migrations/0004_flow_limit.sql").read_text())
+        self.db.executescript((ROOT / "migrations/0005_probe_delivery.sql").read_text())
 
     def connect(self):
         db = sqlite3.connect(self.path)
@@ -169,7 +200,8 @@ class Accounts(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT count(*) FROM medications").fetchone()[0], 1)
         self.assertEqual(self.db.execute("SELECT count(*) FROM push_subscriptions").fetchone()[0], 1)
         self.db.execute("CREATE TABLE d1_migrations(name TEXT)")
-        self.db.execute("INSERT INTO d1_migrations VALUES('0002_auth.sql'),('0003_owner_isolation.sql'),('0004_flow_limit.sql')")
+        self.db.execute("INSERT INTO d1_migrations VALUES('0002_auth.sql'),('0003_owner_isolation.sql'),('0004_flow_limit.sql'),('0005_probe_delivery.sql')")
+        self.db.executescript((ROOT / "migrations/rollback/0005_probe_delivery_down.sql").read_text())
         self.db.executescript((ROOT / "migrations/rollback/0004_flow_limit_down.sql").read_text())
         self.assertNotIn("client", [row[1] for row in self.db.execute("PRAGMA table_info(oauth_flows)")])
         self.db.executescript((ROOT / "migrations/rollback/0003_owner_isolation_down.sql").read_text())
@@ -178,6 +210,16 @@ class Accounts(unittest.TestCase):
         tables = {row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertFalse(tables & {"users", "external_identities", "sessions", "oauth_flows"})
         self.assertEqual(self.db.execute("SELECT count(*) FROM medications").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM d1_migrations").fetchone()[0], 0)
+
+    def test_probe_downgrade_does_not_replay_terminal_reservations(self):
+        with self.db:
+            self.db.execute("CREATE TABLE d1_migrations(name TEXT)")
+            self.db.execute("INSERT INTO d1_migrations VALUES('0005_probe_delivery.sql')")
+            self.db.execute("UPDATE push_probe SET state='sent'")
+        self.db.executescript((ROOT / "migrations/rollback/0005_probe_delivery_down.sql").read_text())
+        self.assertEqual(self.db.execute("SELECT probe_at FROM push_probe").fetchone(), (None,))
+        self.assertNotIn("generation", [row[1] for row in self.db.execute("PRAGMA table_info(push_probe)")])
         self.assertEqual(self.db.execute("SELECT count(*) FROM d1_migrations").fetchone()[0], 0)
 
     def test_first_logins_create_one_user_visible_to_other_connections(self):
@@ -280,22 +322,22 @@ class Accounts(unittest.TestCase):
 
     def test_existing_probe_becomes_the_legacy_owners_and_probes_are_per_owner(self):
         self.assertEqual(self.db.execute("SELECT owner,probe_at FROM push_probe").fetchall(), [("owner", 5000)])
-        save, disable = sql("INSERT INTO push_probe"), sql("UPDATE push_probe SET probe_at=NULL WHERE endpoint")
-        schedule = sql("UPDATE push_probe SET probe_at=?1")
+        save, disable = sql("INSERT INTO push_probe(owner,endpoint,p256dh,auth) VALUES"), sql("UPDATE push_probe SET probe_at=NULL")
+        schedule = sql("INSERT INTO push_probe(owner,endpoint,p256dh,auth,probe_at")
         with self.db:
             self.db.execute(save, ("https://fcm.googleapis.com/b", "kb", "ab", "user-b"))
             self.db.execute(save, ("https://fcm.googleapis.com/c", "kc", "ac", "user-c"))
             # Registering again replaces only that owner's probe.
             self.db.execute(save, ("https://fcm.googleapis.com/c2", "kc2", "ac2", "user-c"))
             self.db.execute(sql("INSERT INTO push_subscriptions"), ("sb", "user-b", "https://fcm.googleapis.com/b", "kb", "ab", 1000))
-            self.db.execute(schedule, (9000, "user-b"))
+            self.db.execute(schedule, (9000, "user-b", "https://fcm.googleapis.com/b"))
         rows = dict((owner, (endpoint, at)) for owner, endpoint, at in self.db.execute("SELECT owner,endpoint,probe_at FROM push_probe"))
         self.assertEqual(rows["user-b"], ("https://fcm.googleapis.com/b", 9000))
         self.assertEqual(rows["user-c"], ("https://fcm.googleapis.com/c2", None))
         self.assertEqual(rows["owner"][0], "https://fcm.googleapis.com/a")
         # A user cannot schedule or disable another user's probe, nor schedule one without an enabled subscription.
         with self.db:
-            self.assertEqual(self.db.execute(schedule, (9500, "user-c")).rowcount, 0)
+            self.assertEqual(self.db.execute(schedule, (9500, "user-c", "https://fcm.googleapis.com/b")).rowcount, 0)
             self.assertEqual(self.db.execute(disable, ("https://fcm.googleapis.com/b", "user-c")).rowcount, 0)
             self.assertEqual(self.db.execute(disable, ("https://fcm.googleapis.com/b", "user-b")).rowcount, 1)
 
@@ -349,6 +391,148 @@ class Accounts(unittest.TestCase):
             self.db.execute(counter, ("user-b", 5))
             self.db.execute(counter, ("user-a", 4))
         self.assertEqual(dict(self.db.execute("SELECT owner,count FROM counters").fetchall()), {"user-a": 4, "user-b": 5})
+
+
+class ScheduledDelivery(Persistence):
+    def reserve_probe(self, at=1000, endpoint="https://fcm.googleapis.com/a", owner="owner"):
+        with self.db:
+            return self.db.execute(sql("INSERT INTO push_probe(owner,endpoint,p256dh,auth,probe_at"), (at, owner, endpoint)).rowcount
+
+    def claim_probe(self, now, lease, connection=None):
+        db = connection or self.db
+        with db:
+            return db.execute(sql("UPDATE push_probe SET state='sending',attempt_count"), (now, lease, now-900000, 6)).fetchone()
+
+    def claim(self, now, lease, connection=None):
+        db = connection or self.db
+        with db:
+            return db.execute(sql("UPDATE notification_deliveries SET state='sending',attempt_count"), (now, lease, 6)).fetchone()
+
+    def test_duplicate_generation_and_owner_revision_guard(self):
+        self.db.execute(sql("INSERT INTO push_subscriptions"), ("sub", "owner", "https://fcm.googleapis.com/a", "key", "auth", 1000))
+        job = sql("INSERT OR IGNORE INTO notification_jobs SELECT")
+        deliveries = sql("INSERT OR IGNORE INTO notification_deliveries(job_id")
+        for _ in range(2):
+            with self.db:
+                self.db.execute(job, ("job", "slot", 1000, 901000, "med", "owner", 1))
+                self.db.execute(deliveries, ("job", 1000))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM notification_jobs").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM notification_deliveries").fetchone()[0], 1)
+        # A read racing with an edit cannot insert the old revision.
+        self.save(1)
+        with self.db:
+            self.db.execute(job, ("stale", "slot", 1000, 901000, "med", "owner", 1))
+        self.assertFalse(self.db.execute("SELECT 1 FROM notification_jobs WHERE id='stale'").fetchall())
+
+    def test_claim_lease_recovery_and_stale_completion(self):
+        self.seed_job()
+        with self.db:
+            self.db.execute("UPDATE notification_deliveries SET next_attempt_at=1000")
+        other = self.connect()
+        try:
+            self.assertEqual(self.claim(1000, 121000), ("job", "sub"))
+            self.assertIsNone(self.claim(1000, 121000, other))
+            self.assertIsNone(self.claim(120999, 240999, other))
+            self.assertEqual(self.claim(121000, 241000, other), ("job", "sub"))
+            finish = sql("UPDATE notification_deliveries SET state=?4")
+            with self.db:
+                self.db.execute(finish, ("job", "sub", 121000, "sent", 121000, "accepted"))
+            self.assertEqual(self.db.execute("SELECT state,attempt_count FROM notification_deliveries").fetchone(), ("sending", 2))
+            with self.db:
+                self.db.execute(finish, ("job", "sub", 241000, "pending", 300000, "retry"))
+            self.assertIsNone(self.claim(299999, 419999))
+            self.assertEqual(self.claim(300000, 420000), ("job", "sub"))
+        finally:
+            other.close()
+
+    def test_expiry_and_attempt_limit_prevent_replay(self):
+        self.seed_job()
+        with self.db:
+            self.db.execute("UPDATE notification_deliveries SET next_attempt_at=1000,attempt_count=6")
+        self.assertIsNone(self.claim(1000, 121000))
+        with self.db:
+            self.db.execute("UPDATE notification_deliveries SET attempt_count=0")
+        self.assertIsNone(self.claim(901001, 1021001))
+        with self.db:
+            self.db.execute(sql("UPDATE notification_jobs SET state='expired'"), (901001,))
+            self.db.execute(sql("UPDATE notification_deliveries SET state='expired',lease_until=NULL"))
+        self.assertEqual(self.db.execute("SELECT state FROM notification_deliveries").fetchone()[0], "expired")
+
+    def test_expired_response_cannot_disable_reregistered_subscription_or_new_lease(self):
+        self.seed_job()
+        with self.db:
+            self.db.execute("UPDATE notification_deliveries SET next_attempt_at=1000")
+        self.assertEqual(self.claim(1000, 121000), ("job", "sub"))
+        expire = sql("UPDATE push_subscriptions SET enabled=0 WHERE id=?1 AND endpoint")
+        old = ("sub", "https://fcm.googleapis.com/a", "key", "auth", 1000, "job", 121000)
+        # Even identical endpoint/keys represent a new registration after save.
+        with self.db:
+            self.db.execute(sql("INSERT INTO push_subscriptions"), ("ignored-id", "owner", old[1], "key", "auth", 2000))
+            self.db.execute(expire, old)
+        self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone()[0], 1)
+        self.assertEqual(self.claim(121000, 241000), ("job", "sub"))
+        with self.db:
+            self.db.execute(expire, (*old[:4], 2000, "job", 121000))
+        self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone()[0], 1)
+        # Only the current lease and current subscription snapshot may expire it.
+        with self.db:
+            self.db.execute(expire, (*old[:4], 2000, "job", 241000))
+        self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT state FROM notification_deliveries").fetchone()[0], "cancelled")
+
+    def test_probe_claim_recovery_and_reservation_generation_fence(self):
+        self.seed_job()
+        self.assertEqual(self.reserve_probe(), 1)
+        other = self.connect()
+        try:
+            self.assertEqual(self.claim_probe(1000, 121000), ("owner", 1))
+            self.assertIsNone(self.claim_probe(1000, 121000, other))
+            self.assertIsNone(self.claim_probe(120999, 240999, other))
+            self.assertEqual(self.claim_probe(121000, 241000, other), ("owner", 1))
+            complete = sql("UPDATE push_probe SET state=?4")
+            with self.db:
+                self.db.execute(complete, ("owner", 1, 121000, "sent", 121000, "accepted"))
+            self.assertEqual(self.db.execute("SELECT state,attempt_count FROM push_probe").fetchone(), ("sending", 2))
+            # Even an identical reservation time is a new generation.
+            self.reserve_probe()
+            self.assertEqual(self.claim_probe(121000, 241000), ("owner", 2))
+            with self.db:
+                self.db.execute(complete, ("owner", 1, 241000, "sent", 121000, "accepted"))
+                self.db.execute(sql("UPDATE push_subscriptions SET enabled=0 WHERE endpoint"),
+                                ("https://fcm.googleapis.com/a", "owner", "key", "auth", 1000, 1, 241000))
+            self.assertEqual(self.db.execute("SELECT state,attempt_count FROM push_probe").fetchone(), ("sending", 1))
+            self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone()[0], 1)
+            with self.db:
+                self.db.execute(complete, ("owner", 2, 241000, "pending", 300000, "retry"))
+            self.assertIsNone(self.claim_probe(299999, 419999))
+            self.assertEqual(self.claim_probe(300000, 420000), ("owner", 2))
+        finally:
+            other.close()
+
+    def test_probe_uses_requested_device_and_stops_after_deadline_or_disable(self):
+        self.seed_job()
+        with self.db:
+            self.db.execute(sql("INSERT INTO push_subscriptions"), ("other-device", "owner", "https://fcm.googleapis.com/b", "kb", "ab", 1000))
+        self.reserve_probe(endpoint="https://fcm.googleapis.com/b")
+        self.reserve_probe(endpoint="https://fcm.googleapis.com/a")
+        self.assertEqual(self.db.execute("SELECT endpoint,generation FROM push_probe").fetchone(), ("https://fcm.googleapis.com/a", 2))
+        self.assertEqual(self.reserve_probe(owner="another"), 0)
+        self.assertEqual(self.claim_probe(901000, 1021000), ("owner", 2))
+        self.reserve_probe()
+        self.assertIsNone(self.claim_probe(901001, 1021001))
+        with self.db:
+            self.db.execute(sql("UPDATE push_probe SET state='expired',lease_until=NULL"), (1001,))
+        self.assertEqual(self.db.execute("SELECT state FROM push_probe").fetchone()[0], "expired")
+        self.reserve_probe()
+        with self.db:
+            self.db.execute("UPDATE push_probe SET attempt_count=6")
+        self.assertIsNone(self.claim_probe(1000, 121000))
+        self.reserve_probe()
+        self.claim_probe(1000, 121000)
+        with self.db:
+            self.db.execute(sql("UPDATE push_subscriptions SET enabled=0,updated_at"), ("https://fcm.googleapis.com/a", "owner", 2000))
+        self.assertIsNone(self.claim_probe(121000, 241000))
+        self.assertEqual(self.db.execute("SELECT state FROM push_probe").fetchone()[0], "cancelled")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@
 mod assets;
 mod auth;
 mod auth_store;
+mod delivery;
 pub mod domain;
 mod failure;
 pub mod form_fields;
@@ -26,6 +27,7 @@ mod medications;
 mod notifications;
 mod oidc;
 mod pause_edit;
+mod probe_delivery;
 mod push;
 mod repository;
 mod schedule_status;
