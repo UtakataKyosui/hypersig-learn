@@ -82,6 +82,8 @@ Service Workerは通知だけを扱い、服薬情報やページをオフライ
 
 pull request では `check`（fmt、clippy、test）と `wasm` が動く。main への push では、これらが通ったあとに Cloudflare Workers へデプロイし、`/manifest.webmanifest` が 200 を返すことを確かめる。
 
+デプロイ時の metadata 取得失敗・403 は [API Token の権限と復旧手順](docs/ci-cd.md#api-tokenの権限と403からの復旧48)を参照。実機と本番Cronの受け入れには [実施手順・記録票](docs/mvp-device-runbook.md)を使う。
+
 ## ドキュメント
 
 | ページ | 内容 |

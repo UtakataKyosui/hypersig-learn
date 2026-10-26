@@ -58,15 +58,18 @@ pub const STYLE: Stylesheet = Stylesheet::new(
 .med-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: .25rem; border: 0; margin: 0; padding: 0; }
 .med-seg > legend, .med-seg > :not(label) { grid-column: 1 / -1; }
 .med-seg label { justify-content: center; text-align: center; min-height: 2.75rem; padding-inline: .25rem; border-radius: .625rem; background: #E7EFE5; font-size: .875rem; font-weight: 500; cursor: pointer; }
-.med-seg label > span:first-child { display: none; }
+.med-seg label { position: relative; }
+.med-seg label > span:first-child { position: absolute; opacity: 0; }
 .med-seg label:has(input:checked) { background: #fff; color: #246B52; font-weight: 700; box-shadow: inset 0 0 0 2px #246B52; }
 .med-seg label:has(input:focus-visible) { outline: 2px solid #246B52; outline-offset: 2px; }
 .med-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
 .med-card { gap: 1rem; padding-block: 1.25rem; border-radius: 1rem; box-shadow: none; }
 .med-card > * { padding-inline: 1.25rem; }
 .med-card .med-list, .med-card .med-form, .med-card .med-pad { padding-inline: 0; }
+.med-card .med-list { margin-bottom: 1rem; }
 .med-list { display: grid; gap: .75rem; list-style: none; margin: 0; padding: 0; }
 .med-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .75rem; }
+.med-entry { padding: 1rem; border: 1px solid var(--border); border-radius: 1rem; background: #fff; }
 .med-dose { min-height: 5.5rem; padding: 1rem 1.25rem; border-radius: 1rem; background: #fff; }
 .med-dose-time { font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .med-item-text { display: grid; gap: .25rem; min-width: 0; overflow-wrap: anywhere; }
@@ -89,7 +92,7 @@ pub const STYLE: Stylesheet = Stylesheet::new(
 .med-preview-text span { font-size: .75rem; color: var(--muted-foreground); }
 .med-shell input:not([type='checkbox']):not([type='radio']), .med-shell select { min-height: 3rem; border-radius: .75rem; background: #fff; }
 .med-shell form button[type='submit'], .med-cta { width: 100%; min-height: 3.25rem; border-radius: .875rem; font-weight: 700; }
-push-subscribe { display: block; }
+push-subscribe { display: grid; gap: .75rem; }
 push-subscribe button { width: 100%; min-height: 3.25rem; border: 0; border-radius: .875rem; background: #246B52; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
 push-subscribe button:disabled { opacity: .6; cursor: default; }
 .med-item-text > .med-pill { justify-self: start; }

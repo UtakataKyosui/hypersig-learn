@@ -293,6 +293,7 @@ fn pause_list() -> El<EditPage> {
             |item| item.at(PauseView::id()),
             |item| {
                 li().class(Class::new("med-item"))
+                    .class(Class::new("med-entry"))
                     .child(
                         span()
                             .class(Class::new("med-item-text"))

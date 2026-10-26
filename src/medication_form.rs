@@ -97,9 +97,9 @@ impl Validate for MedicationForm {
                 .or(f.at(Self::interval()).ge(1)),
             "間隔は1以上です。",
         )
-        // The weekday group shows its message under the last checkbox.
+        // Report the missing selection on the repeat control, not on Sunday.
         .check(
-            Self::sun(),
+            Self::repeat(),
             f.at(Self::repeat()).not_equals("weekdays").or(any_weekday),
             "曜日を選択してください。",
         );
@@ -194,7 +194,7 @@ impl MedicationForm {
             )+};
         }
         carry!(name => name, start => start, end => end, repeat => repeat,
-            interval => interval, weekdays => sun);
+            interval => interval, weekdays => repeat);
         out
     }
 }
@@ -286,7 +286,8 @@ mod tests {
         assert!(f.parse().is_ok());
         f.repeat = "weekdays".into();
         let errors = f.parse().err().unwrap();
-        assert!(errors.message(MedicationForm::sun()).is_some());
+        assert!(errors.message(MedicationForm::repeat()).is_some());
+        assert!(errors.message(MedicationForm::sun()).is_none());
         f.mon = true;
         assert!(f.parse().is_ok());
         f.repeat = "interval".into();

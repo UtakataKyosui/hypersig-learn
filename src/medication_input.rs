@@ -188,6 +188,14 @@ impl Validate for PauseInput {
             Self::end(),
             !f.at(Self::end()).is_empty(),
             "終了日は必須です。",
+        )
+        .check(
+            Self::end(),
+            f.at(Self::start())
+                .is_empty()
+                .or(f.at(Self::end()).is_empty())
+                .or(f.at(Self::end()).ge(f.at(Self::start()))),
+            "終了日は開始日以降です。",
         );
     }
 }
