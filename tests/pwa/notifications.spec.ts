@@ -235,7 +235,7 @@ test("a synthetic push creates a notification; clicking selects the correct dest
   });
   await expect.poll(notifications).toEqual([{
     title: "服薬の時間です", body: "アプリで今日の予定を確認してください",
-    tag: "medication-test", data: { url: "http://localhost:8791/medications" },
+    tag: "medication-test", data: { url: "http://localhost:8791/" },
   }]);
   await worker.evaluate(async () => {
     for (const notification of await (self as unknown as ServiceWorkerGlobalScope).registration.getNotifications()) notification.close();
@@ -264,7 +264,7 @@ test("a synthetic push creates a notification; clicking selects the correct dest
   await expect.poll(() => worker.evaluate(() => (self as unknown as { pushEvents: number }).pushEvents)).toBe(3);
   await expect.poll(notifications).toEqual([{
     title: "服薬の時間です", body: "アプリで今日の予定を確認してください",
-    tag: "scheduled-fixture", data: { url: "http://localhost:8791/medications" },
+    tag: "scheduled-fixture", data: { url: "http://localhost:8791/" },
   }]);
   // A synthetic event has no OS user activation, so focus/openWindow would
   // throw. Record those boundary calls while running the actual SW handler.
@@ -304,8 +304,8 @@ test("a synthetic push creates a notification; clicking selects the correct dest
     return { focusedUrl, openedUrl };
   });
   expect(destinations).toEqual({
-    focusedUrl: "http://localhost:8791/medications",
-    openedUrl: "http://localhost:8791/medications",
+    focusedUrl: "http://localhost:8791/",
+    openedUrl: "http://localhost:8791/",
   });
   await expect.poll(notifications).toEqual([]);
   await expect(page).toHaveURL("http://localhost:8791/notifications");

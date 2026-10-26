@@ -75,7 +75,7 @@ async function outbound(request) {
     assert.equal(claims.sub, "mailto:ci@example.invalid");
     const payload = decrypt(Buffer.from(await request.arrayBuffer()));
     assert.deepEqual(Object.keys(payload).sort(), ["tag", "url"]);
-    assert.equal(payload.url, "/medications");
+    assert.equal(payload.url, "/");
     assert.equal(typeof payload.tag, "string");
     const ttl = Number(request.headers.get("TTL"));
     assert(Number.isInteger(ttl) && ttl >= 0 && ttl <= 900);
