@@ -20,6 +20,13 @@ export default defineConfig(({ mode }) => {
       name: "app",
       compatibilityDate: "2026-10-01",
       entrypoint: "build/worker/shim.mjs",
+      observability: {
+        enabled: true,
+        headSamplingRate: 1,
+        // OAuth callbacks contain authorization codes in their query strings.
+        redactQueryString: true,
+        logs: { enabled: true, invocationLogs: true, persist: true },
+      },
       triggers: [triggers.scheduled({ schedule: "* * * * *" })],
       env: {
         // Development uses one stable UUID for both cf's CLI and dev server.

@@ -4,6 +4,8 @@
 
 Issue #2（親 #1）の検証結果。`hypersig` / `hypersig_ui` 0.4.1、`worker` 0.8.7 が基準。
 
+現在のブラウザ自動テストと Workers Logs の確認方法は [PWA の自動テストと本番ログ](pwa-testing.md) を参照。以下は工程0時点の検証記録を含む。
+
 ## 検証状況
 
 | 項目 | 状態 | 根拠 |
@@ -129,7 +131,7 @@ Push サービス → SW(push) → showNotification → クリックで /notific
 3. 「1 分後にテスト通知を送る」を押す。
 4. アプリを閉じる（iPhone はマルチタスクから終了）。
 5. 約 1〜2 分後に OS 通知が出ることを確認し、タップして `/notifications` が開くことを確認する。
-6. `npx wrangler tail app` で `push probe: Accepted` を確認する。
+6. Workers Logs または `npx wrangler tail app` で `event: push_probe_result`、`outcome: accepted` を確認する。
 
 ### 結果記録
 

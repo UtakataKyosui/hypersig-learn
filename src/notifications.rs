@@ -10,7 +10,7 @@ use hypersig_ui::{
     AlertVariant, ButtonSize, ButtonVariant, alert, alert_description, alert_title, button,
 };
 use serde::{Deserialize, Serialize};
-use worker::{Date, Env, console_error, console_log};
+use worker::{Date, Env, console_error};
 
 use crate::AppState;
 use crate::assets;
@@ -430,11 +430,17 @@ pub async fn run_scheduled(env: &Env) -> worker::Result<()> {
     let outcome = match sent {
         Ok(outcome) => outcome,
         Err(error) => {
+            log_push_result("error", None);
             crate::repository::restore_claim(&db, &owner, &subscription.endpoint, probe_at).await?;
             return Err(error);
         }
     };
-    console_log!("push probe: {outcome:?}");
+    match &outcome {
+        Outcome::Accepted => log_push_result("accepted", None),
+        Outcome::Expired => log_push_result("expired", None),
+        Outcome::Retry => log_push_result("retry", None),
+        Outcome::Rejected(status) => log_push_result("rejected", Some(*status)),
+    }
     match outcome {
         Outcome::Expired => {
             crate::repository::expire_subscription(&db, &subscription).await?;
@@ -445,6 +451,18 @@ pub async fn run_scheduled(env: &Env) -> worker::Result<()> {
         Outcome::Accepted | Outcome::Rejected(_) => {}
     }
     Ok(())
+}
+
+/// An object, rather than a formatted string, makes the fields queryable in
+/// Workers Logs. Never include the subscription, owner, keys or payload.
+fn log_push_result(outcome: &str, status: Option<u16>) {
+    let json = serde_json::json!({
+        "event": "push_probe_result",
+        "outcome": outcome,
+        "status": status,
+    });
+    let value = js_sys::JSON::parse(&json.to_string()).expect("serde_json produces valid JSON");
+    worker::web_sys::console::log_1(&value);
 }
 
 #[cfg(test)]

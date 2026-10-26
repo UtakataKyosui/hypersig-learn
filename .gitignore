@@ -7,3 +7,5 @@
 /node_modules
 /.cloudflare
 __pycache__/
+/test-results
+/playwright-report
