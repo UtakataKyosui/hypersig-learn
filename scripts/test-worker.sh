@@ -31,6 +31,9 @@ VAPID_SUBJECT=mailto:ci@example.invalid
 VARS
 export PERSIST_DIR="$work/.wrangler/state"
 npx --no-install cf d1 migrations apply 00000000-0000-4000-8000-000000000001 --local --persist-to "$PERSIST_DIR"
+# CLI/migrations remain covered above and by test-cli.py. Repeated fixtures
+# use the same disposable SQLite file without booting a cf/workerd per SQL.
+export FIXTURE_SQLITE=${FIXTURE_SQLITE:-1}
 (cd "$work" && exec "$root/node_modules/.bin/cf" dev --mode test --port 8791) > "$work/dev.log" 2>&1 &
 server=$!
 ready=false
@@ -42,7 +45,7 @@ done
 if [[ "$ready" != true ]]; then cat "$work/dev.log"; exit 1; fi
 if ! python3 scripts/test-worker.py; then cat "$work/dev.log"; exit 1; fi
 if ! python3 scripts/test-scheduled.py; then cat "$work/dev.log"; exit 1; fi
-if ! npx --no-install playwright test; then cat "$work/dev.log"; exit 1; fi
+if ! npx --no-install playwright test "$@"; then cat "$work/dev.log"; exit 1; fi
 # Local Explorer replaces --test-scheduled, which cf's Wrangler delegate rejects.
 curl --fail --silent --show-error -X POST \
   'http://localhost:8791/cdn-cgi/local/explorer/api/local/scheduled?worker=app' \

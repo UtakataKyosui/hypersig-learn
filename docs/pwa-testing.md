@@ -14,6 +14,14 @@ Linux でブラウザのシステム依存が必要なら `playwright install --
 
 `test:worker` は WASM をビルドし、使い捨て D1 と localhost:8791 の Worker を起動する。既存の HTTP テストに続き、`tests/pwa/` の Playwright テストを実行して、終了時にサーバーと D1 を破棄する。Google アカウント、本番 DB、実際の Push 購読は使わない。
 
+fixtureのSQLはmigration済みの使い捨てSQLiteへ直接実行し、CLI起動の繰り返しを省く。`FIXTURE_SQLITE=0`でcf経由に戻せる。WorkerのHTTPやCronの処理は代替しない。Playwrightの引数も渡せるため、合成Push試験の反復は次のコマンドで行える（build・HTTP・Cron結合試験も実行する）。
+
+```sh
+npm run test:worker -- tests/pwa/notifications.spec.ts --grep 'a synthetic push' --repeat-each=10
+```
+
+`Notification.close()`は同期の削除完了を保証しないため、通知一覧が空になるまで待ってから次のPushを注入する。各Pushの受信回数も検証し、単なる待ち時間の延長や自動retryで失敗を隠さない。
+
 確認する内容：
 
 - 認証なしで取得できる manifest・アイコン・SW のヘッダーと、ページの manifest リンク。
