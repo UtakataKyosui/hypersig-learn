@@ -84,7 +84,12 @@ fn public(path: &str) -> bool {
 /// Whether `path` is one of the application's pages: the fixed routes and
 /// everything under the medications page, which has a page per medication.
 fn is_page(path: &str) -> bool {
-    [crate::INDEX.path(), crate::NOTIFICATIONS.path()].contains(&path)
+    [
+        crate::INDEX.path(),
+        crate::COUNTER.path(),
+        crate::NOTIFICATIONS.path(),
+    ]
+    .contains(&path)
         || path == crate::MEDICATIONS.path()
         || path
             .strip_prefix(crate::MEDICATIONS.path())

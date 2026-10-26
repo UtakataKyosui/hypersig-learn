@@ -155,8 +155,7 @@ pub(crate) async fn deliver(
             next: now,
         });
     }
-    let payload =
-        serde_json::json!({"url":crate::MEDICATIONS.url(()).as_str(),"tag":tag}).to_string();
+    let payload = serde_json::json!({"url":crate::INDEX.url(()).as_str(),"tag":tag}).to_string();
     let ttl = u32::try_from((expires - now) / 1000).map_err(|_| invalid())?;
     let outcome = push::send_with_ttl(
         subscription,

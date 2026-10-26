@@ -617,7 +617,7 @@ mod tests {
         assert!(html.contains("data-hs-on-custom"));
         assert!(html.contains("/notifications/subscription"));
         assert!(!html.contains("利用者 ID"));
-        assert!(html.contains(crate::MEDICATIONS.path()));
+        assert!(html.contains(crate::INDEX.path()));
         assert!(html.contains(r#"aria-current="page""#));
     }
 }
