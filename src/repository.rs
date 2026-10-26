@@ -28,6 +28,9 @@ const ASSERT_OWNER: &str =
 const SAVE_PROBE: &str = "INSERT INTO push_probe(owner,endpoint,p256dh,auth) VALUES(?4,?1,?2,?3) ON CONFLICT(owner) DO UPDATE SET endpoint=excluded.endpoint,p256dh=excluded.p256dh,auth=excluded.auth,probe_at=NULL,generation=push_probe.generation+1,state='cancelled',lease_until=NULL";
 const DISABLE_SUBSCRIPTION: &str =
     "UPDATE push_subscriptions SET enabled=0,updated_at=?3 WHERE endpoint=?1 AND owner=?2";
+// A subscription that was never saved is already removed. Still reject an
+// endpoint owned by someone else, in the same transaction as the updates.
+const ASSERT_REMOVAL_OWNER: &str = "SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM push_subscriptions WHERE endpoint=?1 AND owner!=?2) THEN 1 ELSE json('ownership conflict') END";
 const DISABLE_PROBE: &str = "UPDATE push_probe SET probe_at=NULL,state='cancelled',generation=generation+1,lease_until=NULL WHERE endpoint=?1 AND owner=?2";
 
 pub type Db = SendWrapper<Rc<D1Database>>;
@@ -208,7 +211,8 @@ pub async fn unsubscribe(db: &Db, owner: &str, endpoint: &str, now: i64) -> Resu
                 owner.into(),
                 now.to_string().into(),
             ])?,
-            db.prepare(ASSERT_OWNER),
+            db.prepare(ASSERT_REMOVAL_OWNER)
+                .bind(&[endpoint.into(), owner.into()])?,
             db.prepare(DISABLE_PROBE)
                 .bind(&[endpoint.into(), owner.into()])?,
         ])

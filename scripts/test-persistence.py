@@ -79,6 +79,37 @@ class Persistence(unittest.TestCase):
             self.assertEqual(self.db.execute("SELECT state FROM notification_jobs").fetchone()[0], "pending")
             self.assertEqual(self.db.execute("SELECT count(*) FROM pause_periods").fetchone()[0], 1)
 
+    def remove_subscription(self, endpoint, owner="owner"):
+        with self.db:
+            self.db.execute(sql("UPDATE push_subscriptions SET enabled=0,updated_at"), (endpoint, owner, 3000))
+            self.db.execute(sql("SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM push_subscriptions"), (endpoint, owner)).fetchone()
+            self.db.execute(sql("UPDATE push_probe SET probe_at=NULL,state='cancelled'"), (endpoint, owner))
+
+    def test_removal_before_registration_is_idempotent_and_allows_registration(self):
+        endpoint = "https://fcm.googleapis.com/unsaved"
+        self.remove_subscription(endpoint)
+        self.remove_subscription(endpoint)
+        with self.db:
+            self.db.execute(sql("INSERT INTO push_subscriptions"), ("sub", "owner", endpoint, "key", "auth", 4000))
+            self.db.execute(sql("SELECT CASE WHEN changes()=1 THEN 1 ELSE json('ownership"))
+        self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone(), (1,))
+
+    def test_removal_preserves_foreign_subscription_and_cancels_owned_delivery(self):
+        self.seed_job()
+        endpoint = "https://fcm.googleapis.com/a"
+        with self.db:
+            self.db.execute(sql("INSERT INTO push_probe(owner,endpoint,p256dh,auth,probe_at,next_attempt_at)"), (2000, "owner", endpoint))
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.remove_subscription(endpoint, "other")
+        self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone(), (1,))
+        self.assertEqual(self.db.execute("SELECT state FROM push_probe").fetchone(), ("pending",))
+        self.assertEqual(self.db.execute("SELECT state FROM notification_deliveries").fetchone(), ("pending",))
+        self.remove_subscription(endpoint)
+        self.remove_subscription(endpoint)
+        self.assertEqual(self.db.execute("SELECT enabled FROM push_subscriptions").fetchone(), (0,))
+        self.assertEqual(self.db.execute("SELECT state,probe_at FROM push_probe").fetchone(), ("cancelled", None))
+        self.assertEqual(self.db.execute("SELECT state FROM notification_deliveries").fetchone(), ("cancelled",))
+
     def test_subscription_reregistration_owner_and_disable(self):
         self.seed_job()
         query = sql("INSERT INTO push_subscriptions")
