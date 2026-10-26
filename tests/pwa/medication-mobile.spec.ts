@@ -3,6 +3,80 @@ import { expect, test } from "@playwright/test";
 
 test.use({ viewport: { width: 390, height: 844 }, timezoneId: "UTC", isMobile: true, hasTouch: true });
 
+test("new medication has a persistent edit URL and shared form errors preserve input", async ({ context, page }) => {
+  if (!process.env.PERSIST_DIR) throw new Error("Run npm run test:worker");
+  const { cookie } = JSON.parse(execFileSync("python3", ["scripts/pwa-fixture.py"], { encoding: "utf8" }));
+  const [name, value] = cookie.split("=");
+  await context.addCookies([{ name, value, domain: "localhost", path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+  await page.goto("/medications/new");
+  await expect(page).toHaveTitle("お薬を登録");
+  await page.getByLabel("お薬の名前", { exact: false }).fill("新規保存の試験");
+  await page.getByRole("radio", { name: "曜日を指定", exact: true }).check();
+  await page.getByRole("button", { name: "この内容で保存", exact: true }).click();
+  await expect(page.getByText("曜日を選択してください。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "日", exact: true })).not.toHaveAttribute("aria-invalid", "true");
+  await page.getByRole("checkbox", { name: "月", exact: true }).check();
+  await page.getByRole("button", { name: "この内容で保存", exact: true }).click();
+  await expect(page).toHaveURL(/\/medications\/(?!new$)[^/]+$/);
+  const savedUrl = page.url();
+  await expect(page).toHaveTitle("お薬を編集");
+  await page.reload();
+  await expect(page).toHaveURL(savedUrl);
+  await expect(page.getByLabel("お薬の名前", { exact: false })).toHaveValue("新規保存の試験");
+
+  const unit = page.getByLabel("単位", { exact: false });
+  await unit.fill("吸入");
+  await page.getByRole("button", { name: "枠を追加", exact: true }).click();
+  await expect(page.getByText("服薬枠を保存しました。", { exact: true })).toBeVisible();
+  await page.reload();
+  await page.locator(".med-item").getByRole("button", { name: "編集", exact: true }).click();
+  await expect(unit).toHaveValue("吸入");
+  await unit.fill("回");
+  await page.getByRole("button", { name: "枠を更新", exact: true }).click();
+  await expect(page.locator(".med-item").first()).toContainText("回");
+
+  const pauseStart = page.locator("#ui-pause-value-start-input");
+  const pauseEnd = page.locator("#ui-pause-value-end-input");
+  const pauseForm = page.locator("form").filter({ has: pauseStart });
+  const pauseSave = pauseForm.getByRole("button", { name: "期間を追加", exact: true });
+  await pauseSave.click();
+  await expect(pauseStart).toHaveAttribute("aria-invalid", "true");
+  await expect(pauseEnd).toHaveAttribute("aria-invalid", "true");
+  await pauseStart.fill("2026-11-10");
+  await pauseEnd.fill("2026-11-09");
+  let pauseRequests = 0;
+  page.on("request", request => { if (request.url().endsWith("/medications/edit/pause/save")) pauseRequests += 1; });
+  await pauseSave.click();
+  await expect(pauseEnd).toHaveAttribute("aria-invalid", "true");
+  await expect(pauseEnd).toHaveValue("2026-11-09");
+  expect(pauseRequests).toBe(0);
+  await pauseEnd.fill("2026-11-12");
+  await pauseSave.click();
+  await expect(page.getByText("休薬期間を保存しました。", { exact: true })).toBeVisible();
+  await pauseStart.fill("2026-11-12");
+  await pauseEnd.fill("2026-11-13");
+  await pauseSave.click();
+  await expect(page.getByText("休薬期間が重複しています。", { exact: true })).toBeVisible();
+  await expect(pauseStart).toHaveValue("2026-11-12");
+  await expect(pauseEnd).toHaveValue("2026-11-13");
+
+  await page.route("**/medications/edit/save", route => route.abort("internetdisconnected"));
+  await page.getByLabel("お薬の名前", { exact: false }).fill("通信断で保持する入力");
+  await page.getByRole("button", { name: "この内容で保存", exact: true }).click();
+  await expect(page.getByLabel("お薬の名前", { exact: false })).toHaveValue("通信断で保持する入力");
+  await expect(page.getByText(/接続/).first()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.unroute("**/medications/edit/save");
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const [screen, url] of [["edit", savedUrl], ["today", "/medications"], ["notifications", "/notifications"]]) {
+      await page.goto(url);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: `/tmp/issue79-${screen}-${width}.png`, fullPage: true });
+    }
+  }
+});
+
 test("mobile forms retain rejected input and keyed slots display JST order in a UTC browser", async ({ context, page }) => {
   if (!process.env.PERSIST_DIR) throw new Error("Run npm run test:worker");
   const { cookie, owner } = JSON.parse(execFileSync("python3", ["scripts/pwa-fixture.py"], { encoding: "utf8" }));

@@ -6,6 +6,8 @@ Issue #2（親 #1）の検証結果。`hypersig` / `hypersig_ui` 0.4.1、`worker
 
 現在のブラウザ自動テストと Workers Logs の確認方法は [PWA の自動テストと本番ログ](pwa-testing.md) を参照。以下は工程0時点の検証記録を含む。
 
+現在の実機・本番Cron確認には [受け入れ手順・記録票](mvp-device-runbook.md)を使う。以下の依存版・認証案・暫定購読構成は工程0の履歴であり、現行コードやCargo.lockを置き換える設定指示ではない。
+
 ## 検証状況
 
 | 項目 | 状態 | 根拠 |

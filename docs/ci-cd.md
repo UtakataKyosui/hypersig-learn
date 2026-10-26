@@ -63,3 +63,24 @@ GitHub Secrets は値を読み戻せない。秘密鍵はパスワードマネ�
 `VAPID_PRIVATE_KEY` が登録済みのとき、`setup-vapid.sh` は中断する。鍵を変えると既存の Push 購読がすべて無効になるため。連絡先だけ変えるときは `scripts/setup-vapid.sh --subject-only` を使い、次のデプロイで反映される。`--dry-run` は鍵の形式だけを確かめ、何も変更しない。
 
 `deploy` ジョブは `D1_DATABASE_ID` が UUID の形でないとき、VAPID または Google の GitHub Secret が空のとき、`GOOGLE_REDIRECT_URL` が `https://…/auth/google/callback` の形でないときに失敗する。
+
+## API Tokenの権限と403からの復旧（#48）
+
+Cloudflare Dashboard のプロフィール → API Tokens → Create Token で **Edit Cloudflare Workers** テンプレートを選び、対象アカウントを `CLOUDFLARE_ACCOUNT_ID` のアカウントに限定する。この構成で確認する権限は次のとおり。テンプレートだけでD1権限が付くとは限らない。
+
+| スコープ | 権限 | 用途 |
+|---|---|---|
+| Account | Workers Scripts: Edit | Workerの配布・設定・Cron schedulesの取得／更新 |
+| Account | D1: Edit | CIのmigration適用とD1操作 |
+| Account | Account Settings: Read | CLIのアカウント情報取得 |
+
+独自ドメイン／zone routeを追加する場合は、そのzoneのWorkers Routes権限も別途確認する。現在のworkers.dev構成に必要な権限とは分ける。最新の名称は [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)、テンプレートの作成手順は [GitHub Actions公式手順](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)、schedulesを含む権限は [Workers権限](https://developers.cloudflare.com/workers/authorization/workers/)を参照する。実トークンの権限内訳はこの作業では読み取っていない。
+
+#48の記録では `Unable to fetch bindings, routes, or services metadata from the dashboard` の背後で `GET /accounts/*/workers/scripts/app/schedules` が403となり、トークン差し替え後に成功した。この汎用メッセージだけで一時障害と決めず、HTTP status・対象account・権限・有効期限を確認する。403以外ならその応答に従って切り分ける。
+
+1. 失敗したActions runとSHAを記録し、失敗ステップのログを確認する。過去runの `Show the Wrangler log` があればその出力も見る。現行cf版workflowにはそのステップがないため、エラーに表示されたWranglerのログパスを確認する。
+2. 本文が不足する場合だけ、一時的に `WRANGLER_LOG_SANITIZE=false` を使って管理された環境で調査する。非サニタイズログには秘密が含まれうる。生ログを公開artifactやIssueに貼らず、共有するのは値を除いたstatusとAPIパスだけにする。調査後は設定を戻す。
+3. 管理者が権限を修正したトークンを作り、`gh secret set CLOUDFLARE_API_TOKEN` の対話入力で差し替える。値をコマンド引数や履歴へ書かない。
+4. `gh run rerun <run-id> --failed` で再実行し、migration・deploy・smoke testの結果と配布SHAを照合する。失敗jobの再実行でも本番DB更新・配布が起きるため、運用担当者が実施する。
+
+トークン差し替え・再実行は今回未実施。成功後は [本番Cron・実機の記録票](mvp-device-runbook.md)へ引き継ぐ。

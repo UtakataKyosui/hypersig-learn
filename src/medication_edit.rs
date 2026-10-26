@@ -9,7 +9,7 @@ use crate::{
     AppState,
     auth::Member,
     domain::UtcInstant,
-    medication_form::{MedicationForm, REPEATS, SlotView, TIMINGS, UNITS, blank_slot},
+    medication_form::{MedicationForm, REPEATS, SlotView, TIMINGS, blank_slot},
     medication_input::{DoseSlotInput, MedicationInput, PauseInput},
     medication_style::{STYLE, Tab, head, tab_bar, theme},
     medications::{self, Editor, Error, Slot},
@@ -142,7 +142,12 @@ pub fn render(editor: &Editor) -> Page<EditPage> {
         pause_now: standing.paused,
         next_dose: standing.next,
     };
-    Page::new("薬の設定", state)
+    let title = if editor.revision == 0 {
+        "お薬を登録"
+    } else {
+        "お薬を編集"
+    };
+    Page::new(title, state)
         .global(hypersig_ui::global())
         .theme(hypersig_ui::theme())
         .theme(theme())
@@ -344,6 +349,7 @@ fn slot_list() -> El<EditPage> {
         |item| item.at(SlotView::id()),
         |item| {
             li().class(Class::new("med-item"))
+                .class(Class::new("med-entry"))
                 .child(
                     span()
                         .class(Class::new("med-item-text"))
@@ -414,12 +420,12 @@ fn slot_form() -> El<EditPage> {
                         .required()
                         .render(),
                 )
-                .child(select_field_in_form(
-                    "単位",
-                    form,
-                    DoseSlotInput::unit(),
-                    UNITS.map(|unit| (unit.to_owned(), unit)),
-                )),
+                .child(
+                    TextField::in_form("単位", form, DoseSlotInput::unit())
+                        .description("錠・包・mL・mgなど、20文字以内")
+                        .required()
+                        .render(),
+                ),
         )
         .child(select_field_in_form(
             "タイミング",
@@ -582,7 +588,12 @@ pub async fn save_medication(
     let editor = with_medication(stored(&state, &member, &target).await?, &form, input);
     let now = hypersig::Timestamp::now().as_millis();
     let saved = medications::commit(&state, &member, editor, now).await?;
-    Ok(medication_saved(&saved))
+    let patches = medication_saved(&saved);
+    Ok(if target.revision == 0 {
+        patches.navigate(crate::MEDICATION.url(saved.id))
+    } else {
+        patches
+    })
 }
 
 /// Adds the slot `input` to `editor`, or replaces the slot `slot_id` when it
