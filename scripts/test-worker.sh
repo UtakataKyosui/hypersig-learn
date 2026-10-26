@@ -16,6 +16,8 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
+export PUSH_FIXTURE_PATH="$work/push-payload.json"
+node scripts/test-push-worker.mjs
 cp cloudflare.config.ts wrangler.config.ts package.json "$work/"
 ln -s "$root/node_modules" "$work/node_modules"
 ln -s "$root/build" "$work/build"
@@ -39,6 +41,7 @@ for _ in {1..60}; do
 done
 if [[ "$ready" != true ]]; then cat "$work/dev.log"; exit 1; fi
 if ! python3 scripts/test-worker.py; then cat "$work/dev.log"; exit 1; fi
+if ! python3 scripts/test-scheduled.py; then cat "$work/dev.log"; exit 1; fi
 if ! npx --no-install playwright test; then cat "$work/dev.log"; exit 1; fi
 # Local Explorer replaces --test-scheduled, which cf's Wrangler delegate rejects.
 curl --fail --silent --show-error -X POST \

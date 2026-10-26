@@ -58,7 +58,11 @@ pub fn routes<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> 
         .route(
             SERVICE_WORKER,
             get(|| async {
-                let mut response = asset("text/javascript; charset=utf-8", SERVICE_WORKER_JS);
+                let config = serde_json::json!({"today":crate::MEDICATIONS.url(()).as_str()});
+                let mut response = asset(
+                    "text/javascript; charset=utf-8",
+                    format!("const appRoutes = {config};\n{SERVICE_WORKER_JS}"),
+                );
                 let headers = response.headers_mut();
                 headers.insert("service-worker-allowed", HeaderValue::from_static(SCOPE));
                 headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));

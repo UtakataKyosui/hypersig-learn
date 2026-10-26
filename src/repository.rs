@@ -25,10 +25,10 @@ const DELETE: &str = "DELETE FROM medications WHERE id=?1 AND owner=?2 AND revis
 const UPSERT_SUBSCRIPTION: &str = "INSERT INTO push_subscriptions VALUES(?1,?2,?3,?4,?5,1,?6) ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh,auth=excluded.auth,enabled=1,updated_at=excluded.updated_at WHERE push_subscriptions.owner=excluded.owner";
 const ASSERT_OWNER: &str =
     "SELECT CASE WHEN changes()=1 THEN 1 ELSE json('ownership conflict') END";
-const SAVE_PROBE: &str = "INSERT INTO push_probe(owner,endpoint,p256dh,auth) VALUES(?4,?1,?2,?3) ON CONFLICT(owner) DO UPDATE SET endpoint=excluded.endpoint,p256dh=excluded.p256dh,auth=excluded.auth,probe_at=NULL";
+const SAVE_PROBE: &str = "INSERT INTO push_probe(owner,endpoint,p256dh,auth) VALUES(?4,?1,?2,?3) ON CONFLICT(owner) DO UPDATE SET endpoint=excluded.endpoint,p256dh=excluded.p256dh,auth=excluded.auth,probe_at=NULL,generation=push_probe.generation+1,state='cancelled',lease_until=NULL";
 const DISABLE_SUBSCRIPTION: &str =
     "UPDATE push_subscriptions SET enabled=0,updated_at=?3 WHERE endpoint=?1 AND owner=?2";
-const DISABLE_PROBE: &str = "UPDATE push_probe SET probe_at=NULL WHERE endpoint=?1 AND owner=?2";
+const DISABLE_PROBE: &str = "UPDATE push_probe SET probe_at=NULL,state='cancelled',generation=generation+1,lease_until=NULL WHERE endpoint=?1 AND owner=?2";
 
 pub type Db = SendWrapper<Rc<D1Database>>;
 #[derive(Deserialize)]
@@ -220,15 +220,28 @@ pub async fn unsubscribe(db: &Db, owner: &str, endpoint: &str, now: i64) -> Resu
 }
 
 /// Returns only status; subscription credentials never enter page signals.
-pub async fn subscription_enabled(db: &Db, owner: &str, endpoint: &str) -> Result<bool, Error> {
+pub enum SubscriptionState {
+    Missing,
+    Enabled,
+    Disabled,
+}
+
+pub async fn subscription_state(
+    db: &Db,
+    owner: &str,
+    endpoint: &str,
+) -> Result<SubscriptionState, Error> {
     SendFuture::new(async {
-        Ok(db
+        let enabled = db
             .prepare("SELECT enabled FROM push_subscriptions WHERE owner=?1 AND endpoint=?2")
             .bind(&[owner.into(), endpoint.into()])?
             .first::<i32>(Some("enabled"))
-            .await?
-            .unwrap_or(0)
-            == 1)
+            .await?;
+        Ok(match enabled {
+            None => SubscriptionState::Missing,
+            Some(1) => SubscriptionState::Enabled,
+            Some(_) => SubscriptionState::Disabled,
+        })
     })
     .await
 }
@@ -245,6 +258,44 @@ fn batch_error(error: &worker::Error) -> Error {
     } else {
         Error::Store
     }
+}
+
+pub async fn counter_saved(db: &Db, owner: &str) -> worker::Result<i32> {
+    SendFuture::new(async {
+        Ok(db
+            .prepare("SELECT count FROM counters WHERE owner=?1")
+            .bind(&[owner.into()])?
+            .first::<i32>(Some("count"))
+            .await?
+            .unwrap_or(0))
+    })
+    .await
+}
+pub async fn counter_save(db: &Db, owner: &str, count: i32) -> worker::Result<()> {
+    SendFuture::new(async {
+        db.prepare("INSERT INTO counters(owner,count) VALUES(?1,?2) ON CONFLICT(owner) DO UPDATE SET count=excluded.count")
+            .bind(&[owner.into(), count.into()])?
+            .run()
+            .await?;
+        Ok(())
+    })
+    .await
+}
+pub async fn schedule_probe(
+    db: &Db,
+    owner: &str,
+    endpoint: &str,
+    at_ms: u64,
+) -> worker::Result<bool> {
+    SendFuture::new(async {
+        let result = db
+            .prepare("INSERT INTO push_probe(owner,endpoint,p256dh,auth,probe_at,next_attempt_at) SELECT owner,endpoint,p256dh,auth,?1,?1 FROM push_subscriptions WHERE owner=?2 AND endpoint=?3 AND enabled=1 ON CONFLICT(owner) DO UPDATE SET endpoint=excluded.endpoint,p256dh=excluded.p256dh,auth=excluded.auth,probe_at=excluded.probe_at,next_attempt_at=excluded.next_attempt_at,generation=push_probe.generation+1,state='pending',attempt_count=0,lease_until=NULL,last_error_class=NULL")
+            .bind(&[at_ms.to_string().into(), owner.into(), endpoint.into()])?
+            .run()
+            .await?;
+        Ok(result.meta()?.and_then(|m| m.changes).unwrap_or(0) > 0)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -274,116 +325,4 @@ mod tests {
             axum::http::StatusCode::CONFLICT
         );
     }
-}
-
-pub async fn counter_saved(db: &Db, owner: &str) -> worker::Result<i32> {
-    SendFuture::new(async {
-        Ok(db
-            .prepare("SELECT count FROM counters WHERE owner=?1")
-            .bind(&[owner.into()])?
-            .first::<i32>(Some("count"))
-            .await?
-            .unwrap_or(0))
-    })
-    .await
-}
-pub async fn counter_save(db: &Db, owner: &str, count: i32) -> worker::Result<()> {
-    SendFuture::new(async {
-        db.prepare("INSERT INTO counters(owner,count) VALUES(?1,?2) ON CONFLICT(owner) DO UPDATE SET count=excluded.count")
-            .bind(&[owner.into(), count.into()])?
-            .run()
-            .await?;
-        Ok(())
-    })
-    .await
-}
-pub async fn schedule_probe(db: &Db, owner: &str, at_ms: u64) -> worker::Result<bool> {
-    SendFuture::new(async {
-        let result = db
-            .prepare("UPDATE push_probe SET probe_at=?1 WHERE owner=?2 AND endpoint IN(SELECT endpoint FROM push_subscriptions WHERE owner=?2 AND enabled=1)")
-            .bind(&[at_ms.to_string().into(), owner.into()])?
-            .run()
-            .await?;
-        Ok(result.meta()?.and_then(|m| m.changes).unwrap_or(0) > 0)
-    })
-    .await
-}
-#[derive(Deserialize)]
-struct ProbeRow {
-    owner: String,
-    endpoint: String,
-    p256dh: String,
-    auth: String,
-    probe_at: f64,
-}
-/// A probe claimed by the scheduled invocation, with the user it belongs to.
-pub struct Claimed {
-    pub owner: String,
-    pub subscription: crate::push::Subscription,
-    pub probe_at: f64,
-}
-/// Claims the oldest due probe of any user whose subscription is still
-/// enabled. The claim is a conditional update on that user's row.
-pub async fn claim_probe(
-    db: &D1Database,
-    now: u64,
-    deadline: u64,
-) -> worker::Result<Option<Claimed>> {
-    let Some(row)=db.prepare("SELECT owner,endpoint,p256dh,auth,probe_at FROM push_probe WHERE probe_at<=?1 AND probe_at>=?2 AND endpoint IN(SELECT endpoint FROM push_subscriptions WHERE owner=push_probe.owner AND enabled=1) ORDER BY probe_at LIMIT 1").bind(&[now.to_string().into(),now.saturating_sub(deadline).to_string().into()])?.first::<ProbeRow>(None).await? else { return Ok(None); };
-    let claimed = db
-        .prepare("UPDATE push_probe SET probe_at=NULL WHERE owner=?2 AND probe_at=?1")
-        .bind(&[row.probe_at.into(), row.owner.as_str().into()])?
-        .run()
-        .await?;
-    if claimed.meta()?.and_then(|m| m.changes).unwrap_or(0) == 0 {
-        return Ok(None);
-    }
-    Ok(Some(Claimed {
-        owner: row.owner,
-        subscription: crate::push::Subscription {
-            endpoint: row.endpoint,
-            p256dh: row.p256dh,
-            auth: row.auth,
-        },
-        probe_at: row.probe_at,
-    }))
-}
-pub async fn expire_subscription(
-    db: &D1Database,
-    subscription: &crate::push::Subscription,
-) -> worker::Result<()> {
-    db.batch(vec![
-        db.prepare(
-            "UPDATE push_subscriptions SET enabled=0 WHERE endpoint=?1 AND p256dh=?2 AND auth=?3",
-        )
-        .bind(&[
-            subscription.endpoint.as_str().into(),
-            subscription.p256dh.as_str().into(),
-            subscription.auth.as_str().into(),
-        ])?,
-        db.prepare("DELETE FROM push_probe WHERE endpoint=?1 AND p256dh=?2 AND auth=?3")
-            .bind(&[
-                subscription.endpoint.as_str().into(),
-                subscription.p256dh.as_str().into(),
-                subscription.auth.as_str().into(),
-            ])?,
-    ])
-    .await?;
-    Ok(())
-}
-/// Puts the claimed probe time back, unless the subscription was replaced or
-/// a newer probe was reserved while the send was in flight.
-pub async fn restore_claim(
-    db: &D1Database,
-    owner: &str,
-    endpoint: &str,
-    probe_at: f64,
-) -> worker::Result<()> {
-    db.prepare(
-        "UPDATE push_probe SET probe_at = ?1 WHERE owner = ?3 AND probe_at IS NULL AND endpoint = ?2",
-    )
-    .bind(&[probe_at.into(), endpoint.into(), owner.into()])?
-    .run()
-    .await?;
-    Ok(())
 }

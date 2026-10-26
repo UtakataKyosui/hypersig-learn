@@ -6,26 +6,29 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use hypersig::html::{Class, CustomEvent, El, div, el, h1, h2, main, p, section, span};
 use hypersig::{Action, Page, Patches, Sig, Signals, if_else};
-use hypersig_ui::{
-    AlertVariant, ButtonSize, ButtonVariant, alert, alert_description, alert_title, button,
-};
 use serde::{Deserialize, Serialize};
 use worker::{Date, Env, console_error};
 
 use crate::AppState;
 use crate::assets;
 use crate::medication_style::{STYLE, Tab, head, tab_bar, theme};
-use crate::push::{self, Outcome, Subscription};
+use crate::push::{self, Subscription};
 
 /// The browser's report on notification support and permission.
 /// `granted` means the visitor allowed it, not that the server saved a
 /// subscription: that is `saved`, which only the server sets.
 #[derive(Signals, Serialize, Deserialize)]
 pub struct NotificationSettings {
+    support: String,
     permission: String,
+    browser_error: bool,
+    standalone: bool,
     saved: bool,
+    subscription_state: String,
     probe: String,
     problem: String,
+    status: i32,
+    removed: String,
 }
 
 /// What `<push-subscribe>` reports from the browser. It describes data from
@@ -37,20 +40,30 @@ pub struct SubscriptionInput {
     auth: String,
 }
 
-const PUSH_STATUS: CustomEvent<String> = CustomEvent::new("push-status");
+#[derive(Signals, Serialize, Deserialize)]
+struct BrowserStatus {
+    supported: bool,
+    permission: String,
+    failed: bool,
+    standalone: bool,
+}
+
+const PUSH_STATUS: CustomEvent<BrowserStatus> = CustomEvent::new("push-status");
 const PUSH_SUBSCRIPTION: CustomEvent<SubscriptionInput> = CustomEvent::new("push-subscription");
+const PUSH_CHECK: CustomEvent<String> = CustomEvent::new("push-check");
+const PUSH_REMOVE: CustomEvent<String> = CustomEvent::new("push-remove");
+const PUSH_TEST: CustomEvent<String> = CustomEvent::new("push-test");
+const PUSH_MISSING: CustomEvent<()> = CustomEvent::new("push-missing");
 
 pub const REGISTER: Action<NotificationSettings, SubscriptionInput> =
     Action::post("/notifications/subscription");
-pub const SCHEDULE_PROBE: Action<NotificationSettings, ()> = Action::post("/notifications/probe");
+pub const SCHEDULE_PROBE: Action<NotificationSettings, String> =
+    Action::post("/notifications/probe");
 pub const UNREGISTER: Action<NotificationSettings, String> =
     Action::post("/notifications/unsubscribe");
 pub const SUBSCRIPTION_STATUS: Action<NotificationSettings, String> =
     Action::post("/notifications/subscription/status");
 
-/// How long after its time a probe is still sent: the 15-minute deadline of
-/// the MVP.
-const DEADLINE_MS: u64 = 15 * 60 * 1000;
 const PROBE_DELAY_MS: u64 = 60 * 1000;
 
 /// The hosts of the push services of Chrome, Firefox, Safari, and Edge. An
@@ -150,8 +163,18 @@ fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
     let problem = NotificationSettings::problem();
     let vapid_missing = vapid_public.is_empty();
     let initial = NotificationSettings {
+        support: "unknown".to_owned(),
         permission: "unknown".to_owned(),
+        browser_error: false,
+        standalone: false,
         saved: false,
+        subscription_state: "unknown".to_owned(),
+        status: if vapid_missing {
+            i32::from(StatusCode::SERVICE_UNAVAILABLE.as_u16())
+        } else {
+            0
+        },
+        removed: String::new(),
         probe: String::new(),
         problem: if vapid_missing {
             "VAPID公開鍵が設定されていません。".to_owned()
@@ -160,7 +183,11 @@ fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
         },
     };
     let granted = permission.equals("granted");
-    let ready = granted.clone().and(saved);
+    let ready = granted
+        .clone()
+        .and(saved)
+        .and(NotificationSettings::support().equals("supported"))
+        .and(!NotificationSettings::browser_error());
     Page::new("通知設定", initial)
         .global(hypersig_ui::global())
         .theme(hypersig_ui::theme())
@@ -175,12 +202,7 @@ fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
                     h1().text("通知設定"),
                     p().text("いつもの端末に、そっとお知らせ。"),
                 ))
-                .child(
-                    alert(AlertVariant::Destructive)
-                        .show(!problem.is_empty())
-                        .child(alert_title().text("通知を設定できません"))
-                        .child(alert_description().bind_text(problem)),
-                )
+                .child(crate::failure::alerts(problem, NotificationSettings::status()))
                 .child(
                     section()
                         .class(Class::new("med-panel"))
@@ -194,24 +216,7 @@ fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
                                     "通知の準備ができていません",
                                 )),
                         )
-                        .child(
-                            div()
-                                .class(Class::new("med-row"))
-                                .child(span().text("ブラウザの許可"))
-                                .child(el("strong").bind_text(if_else(
-                                    granted,
-                                    "許可済み",
-                                    if_else(
-                                        permission.equals("denied"),
-                                        "拒否",
-                                        if_else(
-                                            permission.equals("unsupported"),
-                                            "非対応",
-                                            "未確認",
-                                        ),
-                                    ),
-                                ))),
-                        )
+                        .child(browser_status_rows())
                         .child(
                             div()
                                 .class(Class::new("med-row"))
@@ -222,20 +227,13 @@ fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
                                     "未保存",
                                 ))),
                         )
-                        .child(
-                            el("push-subscribe")
-                                .attr("vapid-key", vapid_public)
-                                .attr("worker", assets::SERVICE_WORKER)
-                                .attr("scope", assets::SCOPE)
-                                .attr("label", "通知を有効にする")
-                                .on_custom(PUSH_STATUS, move |status| permission.set(status))
-                                .on_custom(PUSH_SUBSCRIPTION, move |detail| {
-                                    REGISTER.call_with(detail).error(problem)
-                                }),
-                        ),
+                        .child(subscription_control(vapid_public)),
                 )
+                .child(subscription_guidance())
                 .child(preview_section())
-                .child(probe_section(problem, probe))
+                .child(p().show(NotificationSettings::browser_error()).text("端末の通知操作に失敗しました。通信とブラウザの設定を確認し、再設定または解除をやり直してください。"))
+                .child(p().text("iPhone／iPadではSafariからホーム画面に追加して開いてください。拒否した場合は端末の通知設定を変更し、再設定してください。許可済みでも未保存・失効の場合は通知を有効にしてください。"))
+                .child(probe_section(probe))
                 .child(
                     div()
                         .class(Class::new("med-actions"))
@@ -243,6 +241,113 @@ fn settings_view(vapid_public: &str) -> Page<NotificationSettings> {
                 )
                 .child(tab_bar(Tab::Settings)),
         )
+}
+
+fn browser_status_rows() -> El<NotificationSettings> {
+    let permission = NotificationSettings::permission();
+    let support = NotificationSettings::support();
+    div()
+        .child(
+            div()
+                .class(Class::new("med-row"))
+                .child(span().text("利用形態"))
+                .child(el("strong").bind_text(if_else(
+                    NotificationSettings::standalone(),
+                    "ホーム画面アプリ",
+                    "ブラウザ",
+                ))),
+        )
+        .child(
+            div()
+                .class(Class::new("med-row"))
+                .child(span().text("対応状況"))
+                .child(el("strong").bind_text(if_else(
+                    support.equals("unknown"),
+                    "未確認",
+                    if_else(support.equals("supported"), "対応", "非対応"),
+                ))),
+        )
+        .child(
+            div()
+                .class(Class::new("med-row"))
+                .child(span().text("ブラウザの許可"))
+                .child(el("strong").bind_text(if_else(
+                    permission.equals("granted"),
+                    "許可済み",
+                    if_else(
+                        permission.equals("denied"),
+                        "拒否",
+                        if_else(permission.equals("default"), "未許可", "未確認"),
+                    ),
+                ))),
+        )
+}
+
+fn subscription_guidance() -> El<NotificationSettings> {
+    let state = NotificationSettings::subscription_state();
+    div()
+        .child(p().show(state.equals("missing")).text("この端末の購読は未登録です。"))
+        .child(p().show(state.equals("inactive")).text("この購読は失効または解除済みです。通知を有効にして再登録してください。"))
+        .child(p().show(!NotificationSettings::standalone()).text("ブラウザから利用中です。iPhone／iPadでは、ホーム画面に追加したアイコンから開いてください。"))
+}
+
+fn subscription_control(vapid_public: &str) -> El<NotificationSettings> {
+    let problem = NotificationSettings::problem();
+    let status = NotificationSettings::status();
+    el("push-subscribe")
+        .attr("vapid-key", vapid_public)
+        .attr("worker", assets::SERVICE_WORKER)
+        .attr("scope", assets::SCOPE)
+        .attr("label", "通知を有効にする")
+        .bind_attr("removed-endpoint", NotificationSettings::removed())
+        .on_custom(PUSH_CHECK, move |endpoint| {
+            NotificationSettings::saved().set(false).then(
+                SUBSCRIPTION_STATUS
+                    .call_with(endpoint)
+                    .error(problem)
+                    .status(status),
+            )
+        })
+        .on_custom(PUSH_REMOVE, move |endpoint| {
+            NotificationSettings::saved()
+                .set(false)
+                .then(UNREGISTER.call_with(endpoint).error(problem).status(status))
+        })
+        .on_custom(PUSH_TEST, move |endpoint| {
+            SCHEDULE_PROBE
+                .call_with(endpoint)
+                .error(problem)
+                .status(status)
+        })
+        .on_custom(PUSH_MISSING, |_| {
+            NotificationSettings::saved()
+                .set(false)
+                .then(NotificationSettings::subscription_state().set("missing"))
+        })
+        .on_custom(PUSH_STATUS, move |detail| {
+            NotificationSettings::support()
+                .set(if_else(
+                    detail.clone().at(BrowserStatus::supported()),
+                    "supported",
+                    "unsupported",
+                ))
+                .then(
+                    NotificationSettings::permission()
+                        .set(detail.clone().at(BrowserStatus::permission())),
+                )
+                .then(
+                    NotificationSettings::browser_error()
+                        .set(detail.clone().at(BrowserStatus::failed())),
+                )
+                .then(
+                    NotificationSettings::standalone().set(detail.at(BrowserStatus::standalone())),
+                )
+        })
+        .on_custom(PUSH_SUBSCRIPTION, move |detail| {
+            NotificationSettings::saved()
+                .set(false)
+                .then(REGISTER.call_with(detail).error(problem).status(status))
+        })
 }
 
 fn preview_section() -> El<NotificationSettings> {
@@ -276,10 +381,7 @@ fn preview_section() -> El<NotificationSettings> {
         )
 }
 
-fn probe_section(
-    problem: Sig<NotificationSettings, String>,
-    probe: Sig<NotificationSettings, String>,
-) -> El<NotificationSettings> {
+fn probe_section(probe: Sig<NotificationSettings, String>) -> El<NotificationSettings> {
     section()
         .class(Class::new("med-section"))
         .attr("aria-labelledby", "probe-heading")
@@ -291,12 +393,6 @@ fn probe_section(
         .child(
             p().class(Class::new("med-muted"))
                 .text("1分後に、テスト通知を予約します。"),
-        )
-        .child(
-            button(ButtonVariant::Default, ButtonSize::Lg)
-                .class(Class::new("med-cta"))
-                .on_click(SCHEDULE_PROBE.call().error(problem))
-                .text("テスト通知を予約"),
         )
         .child(
             p().class(Class::new("med-muted"))
@@ -325,6 +421,8 @@ pub async fn register(
     .map_err(ProbeError::Repository)?;
     Ok(NotificationSettings::saved()
         .patch(true)
+        .and(NotificationSettings::subscription_state().patch("active".to_owned()))
+        .and(NotificationSettings::removed().patch(String::new()))
         .and(NotificationSettings::problem().patch(String::new()))
         .into())
 }
@@ -332,17 +430,22 @@ pub async fn register(
 pub async fn schedule(
     state: AppState,
     member: crate::auth::Member,
-    (): (),
+    endpoint: String,
 ) -> Result<Patches<NotificationSettings>, ProbeError> {
+    if !endpoint_is_allowed(&endpoint) {
+        return Err(InvalidSubscription::Endpoint.into());
+    }
     let at = now_ms() + PROBE_DELAY_MS;
-    if !crate::repository::schedule_probe(&state.db, member.owner(), at)
+    if !crate::repository::schedule_probe(&state.db, member.owner(), &endpoint, at)
         .await
         .map_err(StoreError::from)?
     {
         return Err(ProbeError::NotSubscribed);
     }
     Ok(NotificationSettings::probe()
-        .patch("約1分後に毎分の定期実行がテスト通知を送ります。".to_owned())
+        .patch(
+            "テスト通知の予約を受け付けました。端末への表示は端末で確認してください。".to_owned(),
+        )
         .into())
 }
 
@@ -393,7 +496,11 @@ pub async fn unregister(
     )
     .await
     .map_err(ProbeError::Repository)?;
-    Ok(NotificationSettings::saved().patch(false).into())
+    Ok(NotificationSettings::saved()
+        .patch(false)
+        .and(NotificationSettings::subscription_state().patch("inactive".to_owned()))
+        .and(NotificationSettings::removed().patch(endpoint))
+        .into())
 }
 
 pub async fn subscription_status(
@@ -404,58 +511,30 @@ pub async fn subscription_status(
     if !endpoint_is_allowed(&endpoint) {
         return Err(InvalidSubscription::Endpoint.into());
     }
-    let saved = crate::repository::subscription_enabled(&state.db, member.owner(), &endpoint)
+    let state = crate::repository::subscription_state(&state.db, member.owner(), &endpoint)
         .await
         .map_err(ProbeError::Repository)?;
-    Ok(NotificationSettings::saved().patch(saved).into())
+    let (saved, status) = match state {
+        crate::repository::SubscriptionState::Enabled => (true, "active"),
+        crate::repository::SubscriptionState::Disabled => (false, "inactive"),
+        crate::repository::SubscriptionState::Missing => (false, "missing"),
+    };
+    Ok(NotificationSettings::saved()
+        .patch(saved)
+        .and(NotificationSettings::subscription_state().patch(status.to_owned()))
+        .into())
 }
 
-/// The scheduled invocation: sends the probe if its time has come and it is
-/// within the deadline. The claim is a conditional update, so two
-/// invocations do not both send it.
+/// Both queues use durable claims and the same sender and deadline policy.
 pub async fn run_scheduled(env: &Env) -> worker::Result<()> {
-    let db = env.d1("DB")?;
-    let private_key = env.secret("VAPID_PRIVATE_KEY")?.to_string();
-    let subject = env.secret("VAPID_SUBJECT")?.to_string();
-    let now = now_ms();
-    let Some(crate::repository::Claimed {
-        owner,
-        subscription,
-        probe_at,
-    }) = crate::repository::claim_probe(&db, now, DEADLINE_MS).await?
-    else {
-        return Ok(());
-    };
-    let sent = push::send(&subscription, b"probe", &subject, &private_key, now / 1000).await;
-    let outcome = match sent {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            log_push_result("error", None);
-            crate::repository::restore_claim(&db, &owner, &subscription.endpoint, probe_at).await?;
-            return Err(error);
-        }
-    };
-    match &outcome {
-        Outcome::Accepted => log_push_result("accepted", None),
-        Outcome::Expired => log_push_result("expired", None),
-        Outcome::Retry => log_push_result("retry", None),
-        Outcome::Rejected(status) => log_push_result("rejected", Some(*status)),
-    }
-    match outcome {
-        Outcome::Expired => {
-            crate::repository::expire_subscription(&db, &subscription).await?;
-        }
-        Outcome::Retry => {
-            crate::repository::restore_claim(&db, &owner, &subscription.endpoint, probe_at).await?;
-        }
-        Outcome::Accepted | Outcome::Rejected(_) => {}
-    }
-    Ok(())
+    let scheduled = crate::delivery::run(env).await;
+    let probe = crate::probe_delivery::run(env).await;
+    scheduled.and(probe)
 }
 
 /// An object, rather than a formatted string, makes the fields queryable in
 /// Workers Logs. Never include the subscription, owner, keys or payload.
-fn log_push_result(outcome: &str, status: Option<u16>) {
+pub(crate) fn log_push_result(outcome: &str, status: Option<u16>) {
     let json = serde_json::json!({
         "event": "push_probe_result",
         "outcome": outcome,
