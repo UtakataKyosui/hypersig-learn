@@ -158,7 +158,7 @@ pub fn tab_bar<S>(active: Tab) -> El<S> {
         .child(
             div()
                 .class(Class::new("med-tabs-inner"))
-                .child(tab(Tab::Today, "◷", "今日", crate::MEDICATIONS.link()))
+                .child(tab(Tab::Today, "◷", "今日", crate::INDEX.link()))
                 .child(tab(
                     Tab::Medications,
                     "＋",

@@ -179,7 +179,7 @@ fn view() -> El<EditPage> {
             p().text("あなたのペースで、忘れずに。"),
         ))
         .child(
-            a().href(crate::MEDICATIONS.link())
+            a().href(crate::INDEX.link())
                 .class(Class::new("med-link"))
                 .text("← 今日の予定へ戻る"),
         )
@@ -722,7 +722,7 @@ mod tests {
     #[test]
     fn page_links_and_controls_come_from_typed_items() {
         let html = render(&saved_editor()).render();
-        assert!(html.contains(crate::MEDICATIONS.path()), "{html}");
+        assert!(html.contains(crate::INDEX.path()), "{html}");
         assert!(html.contains(crate::auth::LOGIN.path()), "{html}");
         assert!(html.contains(SAVE_MEDICATION.path()), "{html}");
         assert!(html.contains(SAVE_SLOT.path()), "{html}");

@@ -73,7 +73,8 @@ struct Counter {
 
 hypersig::routes! {
     fn pages(Router<AppState>);
-    const INDEX: Route = "/" => index;
+    const INDEX: Route = "/" => medication_list::page;
+    const COUNTER: Route = "/counter" => index;
     const NOTIFICATIONS: Route = "/notifications" => notifications::settings_page;
     const MEDICATIONS: Route = "/medications" => medication_list::page;
     const NEW_MEDICATION: Route = "/medications/new" => medication_edit::new_page;
