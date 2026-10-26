@@ -44,7 +44,9 @@ test("permission alone is not saved; subscribing uses the real action and SSE pa
           endpoint: "https://fcm.googleapis.com/fcm/send/pwa-ci",
           keys: {
             p256dh: "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
-            auth: "BTBZMqHH6r4Tts7J_aSIgg",
+            // Disposable test auth material; never a real Push subscription secret.
+            auth: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))))
+              .replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, ""),
           },
         }),
       } as PushSubscription;
