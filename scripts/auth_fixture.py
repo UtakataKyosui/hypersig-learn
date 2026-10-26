@@ -2,20 +2,45 @@
 
 The Worker keeps a session as a row keyed by the SHA-256 of the session id,
 holding the `tower-sessions` record as JSON. The same rows are written here
-so a local test can hold a cookie without a Google account. Use it only with
-`cf d1 raw --local`; never against a deployed database.
+so a local test can hold a cookie without a Google account. By default it uses
+`cf d1 raw --local`. The disposable Worker suite opts into direct SQLite
+fixtures with FIXTURE_SQLITE=1; neither path accesses a deployed database.
 """
 import base64
 import datetime
 import hashlib
 import json
+import os
 import secrets
+import sqlite3
 import subprocess
+from contextlib import closing
+from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_DATABASE_ID = "00000000-0000-4000-8000-000000000001"
 COOKIE = "__Host-session"
+
+
+@lru_cache(maxsize=1)
+def fixture_database(persist_dir):
+    """Find the migrated disposable D1; never create or guess a database file."""
+    candidates = []
+    for path in (Path(persist_dir) / "v3/d1/miniflare-D1DatabaseObject").glob("*.sqlite"):
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
+        if {"users", "sessions", "medications", "notification_jobs"} <= tables:
+            candidates.append(path.resolve())
+    if len(candidates) != 1:
+        raise RuntimeError("Expected exactly one migrated disposable fixture database")
+    return candidates[0]
+
+
+def fixture_connection(persist_dir):
+    db = sqlite3.connect(fixture_database(str(persist_dir)).as_uri() + "?mode=rw", uri=True, timeout=10)
+    db.execute("PRAGMA foreign_keys=ON")
+    return db
 
 
 def _b64(data):
@@ -24,6 +49,11 @@ def _b64(data):
 
 def execute(persist_dir, sql):
     """Run `sql` against the local D1 kept in `persist_dir`."""
+    if os.environ.get("FIXTURE_SQLITE") == "1":
+        with closing(fixture_connection(persist_dir)) as db, db:
+            # One transaction preserves the atomicity of multi-statement fixtures.
+            db.executescript("BEGIN;\n" + sql + "\n;\nCOMMIT;")
+        return
     subprocess.run(
         ["npx", "--no-install", "cf", "d1", "raw", LOCAL_DATABASE_ID, "--local", "--persist-to", str(persist_dir), "--sql", sql],
         cwd=ROOT, check=True, capture_output=True,
@@ -31,6 +61,10 @@ def execute(persist_dir, sql):
 
 
 def query(persist_dir, sql):
+    if os.environ.get("FIXTURE_SQLITE") == "1":
+        with closing(fixture_connection(persist_dir)) as db:
+            db.row_factory = sqlite3.Row
+            return [dict(row) for row in db.execute(sql)]
     out = subprocess.run(
         ["npx", "--no-install", "cf", "d1", "raw", LOCAL_DATABASE_ID, "--local", "--persist-to", str(persist_dir), "--sql", sql],
         cwd=ROOT, check=True, capture_output=True, text=True,

@@ -240,11 +240,15 @@ test("a synthetic push creates a notification; clicking selects the correct dest
   await worker.evaluate(async () => {
     for (const notification of await (self as unknown as ServiceWorkerGlobalScope).registration.getNotifications()) notification.close();
   });
+  // close() returns before Chromium's notification store has removed the
+  // entry. Do not race its asynchronous cleanup with the next Push.
+  await expect.poll(notifications).toEqual([]);
   if (!process.env.PUSH_FIXTURE_PATH) throw new Error("Run npm run test:worker to generate the actual Worker payload");
   const payload = JSON.parse(readFileSync(process.env.PUSH_FIXTURE_PATH, "utf8"));
   await cdp.send("ServiceWorker.deliverPushMessage", {
     origin: "http://localhost:8791", registrationId: registrationId!, data: JSON.stringify(payload),
   });
+  await expect.poll(() => worker.evaluate(() => (self as unknown as { pushEvents: number }).pushEvents)).toBe(2);
   await expect.poll(notifications).toEqual([{
     title: "服薬の時間です", body: "アプリで今日の予定を確認してください",
     tag: payload.tag, data: { url: new URL(payload.url, "http://localhost:8791").href },
@@ -252,10 +256,12 @@ test("a synthetic push creates a notification; clicking selects the correct dest
   await worker.evaluate(async () => {
     for (const notification of await (self as unknown as ServiceWorkerGlobalScope).registration.getNotifications()) notification.close();
   });
+  await expect.poll(notifications).toEqual([]);
   await cdp.send("ServiceWorker.deliverPushMessage", {
     origin: "http://localhost:8791", registrationId: registrationId!,
     data: JSON.stringify({ url: "https://untrusted.invalid/", tag: "scheduled-fixture", body: "ignored private content" }),
   });
+  await expect.poll(() => worker.evaluate(() => (self as unknown as { pushEvents: number }).pushEvents)).toBe(3);
   await expect.poll(notifications).toEqual([{
     title: "服薬の時間です", body: "アプリで今日の予定を確認してください",
     tag: "scheduled-fixture", data: { url: "http://localhost:8791/medications" },

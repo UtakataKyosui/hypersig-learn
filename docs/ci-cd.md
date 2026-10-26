@@ -28,6 +28,12 @@ Dependabot が作成した PR は全ジョブを skipped にする。作成者�
 
 キャッシュヒット時も検証コマンドは実行する。速度の改善量は GitHub 上の初回実行とキャッシュ復元後の実行を比較して確認する。
 
+Worker試験はmigrationをcfで適用した後、fixtureの書込み・検証用SELECTだけを同じ使い捨てD1のSQLiteファイルへ直接実行する。SQLごとのcf／workerd起動を省くためで、HTTP・認証・Cron・送信・ブラウザは本番wasmのまま検証する。`FIXTURE_SQLITE=0 npm run test:worker`で従来のCLI経路も実行できる。DBはschemaを照合して一意に特定し、不明／複数なら失敗する。CLIと旧DB importの試験は`test-cli.py`に残し、直接操作のtransaction・外部キー・別接続への可視性は`test-auth-fixture.py`で検証する。
+
+ブラウザは`channel: chromium`を使うため、インストールに`--no-shell`を指定して未使用のheadless shellのdownloadを省く。試験件数や失敗判定は減らさない。通知試験は`close()`後に通知一覧が空になることを待ち、各Pushイベントの到着も確認してから次の結果を読む。
+
+2026-10-26の修正時に、同じローカル環境・release buildキャッシュあり・全10ブラウザ試験を含む`npm run test:worker`を比較した。従来のCLI fixture経路は55.42秒、直接SQLite経路は18.54秒（約67%短縮）。両方ともHTTP 78項目・固定時計Push結合・Cron・ブラウザ10件が成功した。合成Push試験は別途10回連続成功（試験部分26.1秒）。これはローカル測定で、GitHub runnerの短縮量は修正後runで確認する。インストール時間や新規ビルド時間はこの比較に含まれない。
+
 `deploy` は `concurrency: deploy` で直列化し、実行中のデプロイを中断しない。スモークテストが `/` でなく `/manifest.webmanifest` を見るのは、将来ページが未ログインをリダイレクトしても CI が壊れないようにするため。
 
 `package.json` と lockfile が `cf` と Wrangler bundler の版を固定する。Node.js 24 上で `cf` を直接実行し、`cloudflare/wrangler-action` は使わない。本番の binding は `cloudflare.config.ts` から作り、TOML を書き換える工程はない。

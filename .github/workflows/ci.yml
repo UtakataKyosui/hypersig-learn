@@ -51,6 +51,7 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: python3 scripts/test-persistence.py
+      - run: python3 scripts/test-auth-fixture.py
 
   wasm:
     needs: changes
@@ -87,7 +88,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: python3 scripts/test-cli.py
-      - run: npx --no-install playwright install --with-deps chromium
+      # channel: chromium uses the full browser, never the headless shell.
+      - run: npx --no-install playwright install --with-deps --no-shell chromium
       - run: npm run test:worker
       - uses: actions/upload-artifact@v4
         if: failure()
