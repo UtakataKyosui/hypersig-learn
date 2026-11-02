@@ -61,7 +61,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hkdf 0.13.0",
  "hmac 0.13.0",
- "hypersig",
+ "hypersig 0.13.3",
  "hypersig_ui",
  "js-sys",
  "openidconnect",
@@ -92,6 +92,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic-waker"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -110,6 +116,7 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "hyper",
  "hyper-util",
  "itoa",
  "matchit 0.8.4",
@@ -704,6 +711,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
+name = "errno"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1037,10 +1054,14 @@ version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c3e324da4c95177d6291d4c8730197c0d1822f8a9766814a4a44fa5ab797c9c"
 dependencies = [
+ "atomic-waker",
  "bytes",
+ "futures-core",
  "http",
  "http-body",
+ "httparse",
  "httpdate",
+ "itoa",
  "pin-project-lite",
  "smallvec",
  "tokio",
@@ -1067,14 +1088,28 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e456ff006f623cdc110d06bbd4283db689541c899a174e8e5cba5dacf3fe6397"
 dependencies = [
+ "hypersig_proc 0.4.1",
+ "hypersig_style 0.4.1",
+ "js-sys",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "hypersig"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1607a917ae6b3379760b56c498d07810e426ab1f37fdb7454c0f2bd659161b4e"
+dependencies = [
  "axum",
  "futures",
- "hypersig_proc",
- "hypersig_style",
+ "hypersig_proc 0.13.3",
+ "hypersig_style 0.13.3",
  "js-sys",
  "multer",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1083,7 +1118,16 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c499182020a241a1fd6534f3496f228d551b1d1d6b7958d8a7088b43db97fd"
 dependencies = [
- "hypersig_proc_impl",
+ "hypersig_proc_impl 0.4.1",
+]
+
+[[package]]
+name = "hypersig_proc"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11c6272722761f2813eb3f626522215071a67b99728ea02c81fc8f2f482350df"
+dependencies = [
+ "hypersig_proc_impl 0.13.3",
 ]
 
 [[package]]
@@ -1098,10 +1142,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypersig_proc_impl"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e6c8debd436b764e6d1b611426f7ca03ec9b70728f905180a64ea6db370c0b5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "hypersig_style"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a5ef4c98f71fa2598c857ad8ffa068cf7da990fa4dd5d7c7d1bfba24f7cc4be"
+
+[[package]]
+name = "hypersig_style"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4902db42a11e451f2a5b310e0f1818a4045df7946695ab0f6fb6e676bd468733"
 
 [[package]]
 name = "hypersig_ui"
@@ -1109,7 +1170,7 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1208c1742a0f7e72a99a553841d036a7a3549d8d7365d266db412a94244519ac"
 dependencies = [
- "hypersig",
+ "hypersig 0.4.1",
  "serde",
 ]
 
@@ -2230,6 +2291,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2477,6 +2548,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys",
