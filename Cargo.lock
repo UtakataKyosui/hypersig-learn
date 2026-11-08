@@ -1084,19 +1084,6 @@ dependencies = [
 
 [[package]]
 name = "hypersig"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e456ff006f623cdc110d06bbd4283db689541c899a174e8e5cba5dacf3fe6397"
-dependencies = [
- "hypersig_proc 0.4.1",
- "hypersig_style 0.4.1",
- "js-sys",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "hypersig"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1607a917ae6b3379760b56c498d07810e426ab1f37fdb7454c0f2bd659161b4e"
@@ -1113,12 +1100,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "hypersig_proc"
-version = "0.4.1"
+name = "hypersig"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8c499182020a241a1fd6534f3496f228d551b1d1d6b7958d8a7088b43db97fd"
+checksum = "6ee5650a18a1ef6f18a59ed863257f94a0dcba97584a91900d078136f7bb5013"
 dependencies = [
- "hypersig_proc_impl 0.4.1",
+ "hypersig_proc 0.15.0",
+ "hypersig_style 0.15.0",
+ "js-sys",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1131,14 +1122,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "hypersig_proc_impl"
-version = "0.4.1"
+name = "hypersig_proc"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ee33d5bf3d4f37c6386370378a40d04bd3b233f79232cf1e67b08b0ff3cfb92"
+checksum = "cb8358658d5ef39ecc2a65f4a28c2b45ec91594a00ab81d35fdea03645fd9b7c"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.9",
+ "hypersig_proc_impl 0.15.0",
 ]
 
 [[package]]
@@ -1153,10 +1142,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "hypersig_style"
-version = "0.4.1"
+name = "hypersig_proc_impl"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a5ef4c98f71fa2598c857ad8ffa068cf7da990fa4dd5d7c7d1bfba24f7cc4be"
+checksum = "d96b4a96ba6a08eb01ee303bea37711c2cb61e016685cabf851446b2cdf3a1d2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
 
 [[package]]
 name = "hypersig_style"
@@ -1165,12 +1159,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4902db42a11e451f2a5b310e0f1818a4045df7946695ab0f6fb6e676bd468733"
 
 [[package]]
-name = "hypersig_ui"
-version = "0.4.1"
+name = "hypersig_style"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1208c1742a0f7e72a99a553841d036a7a3549d8d7365d266db412a94244519ac"
+checksum = "80bb500476f72673ecbecc082c7e8abbe639f9639f9100e78776ce0a96107966"
+
+[[package]]
+name = "hypersig_ui"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8464180b9628cc8c5ed42b7da70c502f24de2639e1b7c53145a1e381ef5ea312"
 dependencies = [
- "hypersig 0.4.1",
+ "hypersig 0.15.0",
  "serde",
 ]
 
