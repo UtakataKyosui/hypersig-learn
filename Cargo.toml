@@ -24,7 +24,7 @@ getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 hkdf = "0.13"
 hmac = "0.13"
-hypersig = "0.13.3"
+hypersig = "0.15.0"
 hypersig_ui = "0.4.1"
 js-sys = "0.3.106"
 openidconnect = { version = "4", default-features = false }
